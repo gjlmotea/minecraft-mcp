@@ -1,0 +1,258 @@
+/**
+ * 直接測 WebSocket adapter：起一個真的監聽，再用真的 ws client 假裝自己是遊戲。
+ * 這樣可以在不開 Minecraft 的情況下驗證協定處理，包含 requestId 對應、
+ * 事件緩衝，以及「回應的 requestId 對不上」時的歸屬行為。
+ */
+
+import { WebSocket } from 'ws';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { createWsMinecraftConnection } from '../../src/adapters/ws-minecraft-connection.js';
+import type { MinecraftConnection } from '../../src/ports/minecraft-connection.js';
+
+const ZERO_REQUEST_ID = '00000000-0000-0000-0000-000000000000';
+
+let active: MinecraftConnection | null = null;
+let client: WebSocket | null = null;
+
+function pickPort(): number {
+  return 24_000 + Math.floor(Math.random() * 4_000);
+}
+
+interface Harness {
+  readonly connection: MinecraftConnection;
+  readonly socket: WebSocket;
+  /** 設定遊戲端要如何回應下一批 commandRequest。 */
+  respond(handler: (commandLine: string, requestId: string, socket: WebSocket) => void): void;
+}
+
+async function startHarness(): Promise<Harness> {
+  const port = pickPort();
+  const connection = createWsMinecraftConnection({
+    host: '127.0.0.1',
+    port,
+    commandTimeoutMs: 1500,
+    eventBufferSize: 50,
+    debugFrames: false,
+    negotiateEncryption: false,
+  });
+  active = connection;
+  await connection.start();
+
+  const socket = new WebSocket(`ws://127.0.0.1:${String(port)}`);
+  client = socket;
+  await new Promise<void>((resolve, reject) => {
+    socket.once('open', () => {
+      resolve();
+    });
+    socket.once('error', reject);
+  });
+  await connection.awaitConnection(2000);
+
+  let handler: ((commandLine: string, requestId: string, socket: WebSocket) => void) | null = null;
+  socket.on('message', (data: Buffer) => {
+    const frame = JSON.parse(data.toString()) as {
+      header: { requestId: string; messagePurpose: string };
+      body: { commandLine?: string };
+    };
+    if (frame.header.messagePurpose !== 'commandRequest') return;
+    handler?.(frame.body.commandLine ?? '', frame.header.requestId, socket);
+  });
+
+  return {
+    connection,
+    socket,
+    respond(next) {
+      handler = next;
+    },
+  };
+}
+
+afterEach(async () => {
+  client?.close();
+  client = null;
+  await active?.close();
+  active = null;
+});
+
+describe('ws adapter', () => {
+  it('連線後回報 connected 與正確的 /connect 指令', async () => {
+    const harness = await startHarness();
+    const status = harness.connection.status();
+    expect(status.connected).toBe(true);
+    expect(status.connectCommand).toBe(`/connect 127.0.0.1:${String(status.port)}`);
+  });
+
+  it('以 requestId 正確對應回應', async () => {
+    const harness = await startHarness();
+    harness.respond((commandLine, requestId, socket) => {
+      socket.send(
+        JSON.stringify({
+          header: { version: 1, requestId, messagePurpose: 'commandResponse' },
+          body: { statusCode: 0, statusMessage: `ran ${commandLine}` },
+        }),
+      );
+    });
+
+    const outcome = await harness.connection.runCommand('say hi');
+    expect(outcome.ok).toBe(true);
+    expect(outcome.statusMessage).toBe('ran say hi');
+    expect(outcome.commandLine).toBe('say hi');
+  });
+
+  it('負的 statusCode 視為失敗', async () => {
+    const harness = await startHarness();
+    harness.respond((_commandLine, requestId, socket) => {
+      socket.send(
+        JSON.stringify({
+          header: { version: 1, requestId, messagePurpose: 'commandResponse' },
+          body: { statusCode: -2_147_483_648, statusMessage: 'Cheats are not enabled' },
+        }),
+      );
+    });
+
+    const outcome = await harness.connection.runCommand('setblock 0 64 0 stone');
+    expect(outcome.ok).toBe(false);
+    expect(outcome.statusMessage).toBe('Cheats are not enabled');
+  });
+
+  it('requestId 全為零時仍歸給唯一待決請求，而不是靜默逾時', async () => {
+    const harness = await startHarness();
+    harness.respond((_commandLine, _requestId, socket) => {
+      socket.send(
+        JSON.stringify({
+          header: { version: 1, requestId: ZERO_REQUEST_ID, messagePurpose: 'error' },
+          body: { statusCode: -2_147_483_648, statusMessage: 'Selector could not be resolved' },
+        }),
+      );
+    });
+
+    const outcome = await harness.connection.runCommand('querytarget @s');
+    expect(outcome.ok).toBe(false);
+    expect(outcome.statusMessage).toBe('Selector could not be resolved');
+    // 關鍵：這是真正的失敗原因，不是「等待遊戲回應超過…」的逾時訊息。
+    expect(outcome.statusMessage).not.toMatch(/超過/);
+  });
+
+  it('遊戲完全不回應時，逾時訊息說清楚是逾時', async () => {
+    const harness = await startHarness();
+    harness.respond(() => {
+      /* 故意不回。 */
+    });
+
+    const outcome = await harness.connection.runCommand('querytarget @s');
+    expect(outcome.ok).toBe(false);
+    expect(outcome.statusMessage).toMatch(/等待遊戲回應超過/);
+  });
+
+  it('把 querytarget 的殘餘欄位保留在 data', async () => {
+    const harness = await startHarness();
+    harness.respond((_commandLine, requestId, socket) => {
+      socket.send(
+        JSON.stringify({
+          header: { version: 1, requestId, messagePurpose: 'commandResponse' },
+          body: { statusCode: 0, details: '[{"position":{"x":1,"y":2,"z":3}}]' },
+        }),
+      );
+    });
+
+    const outcome = await harness.connection.runCommand('querytarget @p');
+    expect(outcome.data).toEqual({ details: '[{"position":{"x":1,"y":2,"z":3}}]' });
+  });
+
+  it('事件進緩衝並可用游標連續讀取', async () => {
+    const harness = await startHarness();
+    await harness.connection.subscribe('PlayerMessage');
+
+    for (const message of ['一', '二']) {
+      harness.socket.send(
+        JSON.stringify({
+          header: { version: 1, requestId: ZERO_REQUEST_ID, messagePurpose: 'event' },
+          body: { eventName: 'PlayerMessage', properties: { Message: message } },
+        }),
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const first = harness.connection.readEvents(0, 1, null);
+    expect(first.events).toHaveLength(1);
+    expect(first.events[0]?.properties['Message']).toBe('一');
+
+    const second = harness.connection.readEvents(first.nextCursor, 10, null);
+    expect(second.events).toHaveLength(1);
+    expect(second.events[0]?.properties['Message']).toBe('二');
+
+    expect(harness.connection.status().subscribedEvents).toEqual(['PlayerMessage']);
+  });
+
+  /**
+   * 真機回歸：Minecraft Education 26.32 實際送出的事件把 eventName 放在
+   * header，而 body 直接就是屬性、沒有 properties 包裝。照舊格式只讀
+   * body.eventName 的話，每一個事件都會被靜默丟棄。
+   */
+  it('接受 Education 26.x 的事件格式：eventName 在 header、body 即屬性', async () => {
+    const harness = await startHarness();
+    harness.socket.send(
+      JSON.stringify({
+        body: { message: '[教師] BlockHand 已接上', receiver: '', sender: '教師', type: 'say' },
+        header: { eventName: 'PlayerMessage', messagePurpose: 'event', version: 17_104_896 },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const page = harness.connection.readEvents(0, 10, null);
+    expect(page.events).toHaveLength(1);
+    expect(page.events[0]?.eventName).toBe('PlayerMessage');
+    expect(page.events[0]?.properties['sender']).toBe('教師');
+    expect(page.events[0]?.properties['type']).toBe('say');
+  });
+
+  it('仍相容舊格式：eventName 與 properties 都在 body', async () => {
+    const harness = await startHarness();
+    harness.socket.send(
+      JSON.stringify({
+        header: { version: 1, requestId: ZERO_REQUEST_ID, messagePurpose: 'event' },
+        body: { eventName: 'BlockPlaced', properties: { Block: 'stone' } },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const page = harness.connection.readEvents(0, 10, null);
+    expect(page.events).toHaveLength(1);
+    expect(page.events[0]?.eventName).toBe('BlockPlaced');
+    expect(page.events[0]?.properties['Block']).toBe('stone');
+  });
+
+  it('可依事件名過濾', async () => {
+    const harness = await startHarness();
+    for (const eventName of ['PlayerMessage', 'BlockPlaced']) {
+      harness.socket.send(
+        JSON.stringify({
+          header: { version: 1, requestId: ZERO_REQUEST_ID, messagePurpose: 'event' },
+          body: { eventName, properties: {} },
+        }),
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const page = harness.connection.readEvents(0, 10, 'BlockPlaced');
+    expect(page.events).toHaveLength(1);
+    expect(page.events[0]?.eventName).toBe('BlockPlaced');
+  });
+
+  it('未連線時 runCommand 丟出帶連線指示的錯誤', async () => {
+    const port = pickPort();
+    const connection = createWsMinecraftConnection({
+      host: '127.0.0.1',
+      port,
+      commandTimeoutMs: 500,
+      eventBufferSize: 10,
+      debugFrames: false,
+    negotiateEncryption: false,
+    });
+    active = connection;
+    await connection.start();
+
+    await expect(connection.runCommand('say hi')).rejects.toThrow(/\/connect/);
+  });
+});
