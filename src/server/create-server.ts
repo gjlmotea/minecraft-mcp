@@ -16,7 +16,7 @@ export function createMcpServer(options: {
     { name: SERVER_NAME, version: options.version },
     {
       instructions: [
-        '這個 server 透過 Minecraft Education Edition 官方的 WebSocket 介面操作遊戲。',
+        '這個 server 透過 Minecraft Education 官方文件化的 /wsserver（/connect）連線命令操作遊戲；連線後的訊息協定沒有公開穩定性保證。',
         '遊戲是連進來的一方：任何工具回報 not-connected 時，先呼叫 mc_status 取得 connectCommand，請使用者在遊戲聊天列輸入它，再用 mc_await_connection 等待。',
         '世界必須開啟作弊（Cheats），否則所有 slash 指令都會被遊戲拒絕。',
         '動手之前先看：用 mc_query_target 取得玩家座標，用 mc_agent_sense 看 Agent 前方，用 mc_build_preview 確認方塊數與範圍。',

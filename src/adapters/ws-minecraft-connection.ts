@@ -34,7 +34,9 @@ import { createEncryptionOffer, extractPublicKey } from './ws-encryption.js';
 
 export interface WsConnectionOptions {
   readonly host: string;
+  /** 優先監聽埠；被同機其他 MCP instance 占用時可退回 OS 配發的空閒埠。 */
   readonly port: number;
+  readonly fallbackToRandomPort: boolean;
   readonly commandTimeoutMs: number;
   readonly eventBufferSize: number;
   /** 把收到的每個原始封包印到 stderr，用於診斷協定行為。 */
@@ -62,9 +64,11 @@ interface IncomingMessage {
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const ENCRYPTION_TIMEOUT_MS = 5_000;
+const BRIDGE_CLOSE_TIMEOUT_MS = 1500;
 
 export function createWsMinecraftConnection(options: WsConnectionOptions): MinecraftConnection {
   let server: WebSocketServer | null = null;
+  let listeningPort: number | null = null;
   let socket: WebSocket | null = null;
   let connectedAt: string | null = null;
   let connectionCount = 0;
@@ -85,15 +89,14 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
    */
   let negotiation: Promise<void> | null = null;
 
-  const connectCommand = `/connect ${options.host}:${String(options.port)}`;
-
   function currentStatus(): ConnectionStatus {
+    const port = listeningPort ?? options.port;
     return {
       listening: server !== null,
       host: options.host,
-      port: options.port,
+      port,
       connected: socket !== null && socket.readyState === 1,
-      connectCommand,
+      connectCommand: `/connect ${options.host}:${String(port)}`,
       connectedAt,
       connectionCount,
       subscribedEvents: [...subscribed].sort(),
@@ -105,6 +108,7 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
 
   function requireSocket(): WebSocket {
     if (socket === null || socket.readyState !== 1) {
+      const connectCommand = currentStatus().connectCommand;
       throw new MinecraftBridgeError(
         'not-connected',
         `Minecraft 尚未連上。請在遊戲聊天列輸入：${connectCommand}（世界需開啟作弊／Cheats）。`,
@@ -369,6 +373,12 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
     }
   }
 
+  function settleConnectionWaiters(status: ConnectionStatus): void {
+    const waiters = connectionWaiters;
+    connectionWaiters = [];
+    for (const waiter of waiters) waiter(status);
+  }
+
   function attachSocket(next: WebSocket): void {
     if (socket !== null && socket.readyState === 1) {
       log('info', 'replacing previous connection', {});
@@ -411,10 +421,7 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
     // 握手完成前不通知等待者，否則呼叫端會在加密就緒之前搶跑。
     negotiation = negotiateEncryption(next).finally(() => {
       resubscribeAll(next);
-      const status = currentStatus();
-      const waiters = connectionWaiters;
-      connectionWaiters = [];
-      for (const waiter of waiters) waiter(status);
+      settleConnectionWaiters(currentStatus());
     });
   }
 
@@ -422,28 +429,62 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
     async start(): Promise<void> {
       if (server !== null) return;
 
-      await new Promise<void>((resolve, reject) => {
-        const created = new WebSocketServer({ host: options.host, port: options.port });
-        const onError = (error: Error): void => {
-          created.off('listening', onListening);
-          reject(
-            new MinecraftBridgeError(
-              'listen-failed',
-              `無法在 ${options.host}:${String(options.port)} 監聽：${error.message}`,
-            ),
-          );
-        };
-        const onListening = (): void => {
-          created.off('error', onError);
-          server = created;
-          resolve();
-        };
-        created.once('error', onError);
-        created.once('listening', onListening);
-        created.on('connection', (incoming: WebSocket) => {
-          attachSocket(incoming);
+      const listen = async (port: number): Promise<WebSocketServer> =>
+        await new Promise<WebSocketServer>((resolve, reject) => {
+          const created = new WebSocketServer({ host: options.host, port });
+          const onError = (error: Error): void => {
+            created.off('listening', onListening);
+            // bind 失敗時仍顯式收掉 ws 包裝的 HTTP server，不依賴目前 Node/ws
+            // 剛好沒有留下 event-loop handle 的實作細節。
+            created.close(() => undefined);
+            reject(error);
+          };
+          const onListening = (): void => {
+            created.off('error', onError);
+            resolve(created);
+          };
+          created.once('error', onError);
+          created.once('listening', onListening);
+          created.on('connection', (incoming: WebSocket) => {
+            attachSocket(incoming);
+          });
         });
-      });
+
+      let created: WebSocketServer;
+      try {
+        created = await listen(options.port);
+      } catch (error: unknown) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (!options.fallbackToRandomPort || code !== 'EADDRINUSE') {
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new MinecraftBridgeError(
+            'listen-failed',
+            `無法在 ${options.host}:${String(options.port)} 監聽：${detail}`,
+          );
+        }
+
+        log('info', 'preferred websocket port is busy; requesting a free port', {
+          host: options.host,
+          preferredPort: options.port,
+        });
+        try {
+          created = await listen(0);
+        } catch (fallbackError: unknown) {
+          const detail = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          throw new MinecraftBridgeError(
+            'listen-failed',
+            `優先埠 ${options.host}:${String(options.port)} 已占用，且無法取得空閒埠：${detail}`,
+          );
+        }
+      }
+
+      const address = created.address();
+      if (address === null || typeof address === 'string') {
+        await new Promise<void>((resolve) => created.close(() => resolve()));
+        throw new MinecraftBridgeError('listen-failed', 'WebSocket bridge 無法取得實際監聽埠。');
+      }
+      server = created;
+      listeningPort = address.port;
 
       heartbeat = setInterval(() => {
         const active = socket;
@@ -460,8 +501,9 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
 
       log('info', 'websocket bridge listening', {
         host: options.host,
-        port: options.port,
-        connectCommand,
+        port: listeningPort,
+        preferredPort: options.port,
+        connectCommand: currentStatus().connectCommand,
       });
     },
 
@@ -471,17 +513,47 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
         heartbeat = null;
       }
       failAllPending('MCP server 正在關閉。');
-      socket?.close(1000, 'server shutting down');
-      socket = null;
-      session = null;
 
       const active = server;
       server = null;
+      listeningPort = null;
+      if (active !== null) {
+        // 新遊戲連入時，舊 socket 可能仍卡在 CLOSING 且不再由 socket 變數指到。
+        // 必須掃完整 clients，否則 WebSocketServer.close() 會無限等舊 TCP。
+        for (const client of active.clients) client.terminate();
+      }
+      socket = null;
+      session = null;
+      negotiation = null;
+      connectedAt = null;
+      settleConnectionWaiters(currentStatus());
+
       if (active === null) return;
-      await new Promise<void>((resolve) => {
-        active.close(() => {
-          resolve();
-        });
+      await new Promise<void>((resolve, reject) => {
+        let finished = false;
+        const finish = (error?: Error): void => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timeout);
+          if (error === undefined) resolve();
+          else reject(error);
+        };
+        const timeout = setTimeout(() => {
+          finish(
+            new MinecraftBridgeError(
+              'close-timeout',
+              `WebSocket bridge 關閉超過 ${String(BRIDGE_CLOSE_TIMEOUT_MS)} ms。`,
+            ),
+          );
+        }, BRIDGE_CLOSE_TIMEOUT_MS);
+        timeout.unref();
+        try {
+          active.close((error?: Error) => {
+            finish(error);
+          });
+        } catch (error: unknown) {
+          finish(error instanceof Error ? error : new Error(String(error)));
+        }
       });
     },
 

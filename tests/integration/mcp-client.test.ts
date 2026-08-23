@@ -19,6 +19,7 @@ function structured(result: unknown): Record<string, unknown> {
 const CONFIG = {
   host: '127.0.0.1',
   port: 19131,
+  fallbackToRandomPort: true,
   commandTimeoutMs: 1000,
   eventBufferSize: 100,
   maxBuildBlocks: 200_000,

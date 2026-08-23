@@ -6,6 +6,7 @@ import type { MinecraftConnection } from './ports/minecraft-connection.js';
 export interface RuntimeConfig {
   readonly host: string;
   readonly port: number;
+  readonly fallbackToRandomPort: boolean;
   readonly commandTimeoutMs: number;
   readonly eventBufferSize: number;
   readonly maxBuildBlocks: number;
@@ -17,6 +18,7 @@ export interface RuntimeConfig {
 const DEFAULTS: RuntimeConfig = {
   host: '127.0.0.1',
   port: 19131,
+  fallbackToRandomPort: true,
   commandTimeoutMs: 10_000,
   eventBufferSize: 500,
   maxBuildBlocks: 200_000,
@@ -37,7 +39,10 @@ export function readRuntimeConfig(): RuntimeConfig {
   const host = process.env['MINECRAFT_EDU_WS_HOST']?.trim();
   return {
     host: host === undefined || host === '' ? DEFAULTS.host : host,
-    port: readInt('MINECRAFT_EDU_WS_PORT', DEFAULTS.port, 1, 65_535),
+    // 0 是 Node 的正式語意：請作業系統配發空閒埠。一般使用仍預設 19131，
+    // doctor／隔離 smoke 可明確設 0，避免碰到使用中的 MCP task。
+    port: readInt('MINECRAFT_EDU_WS_PORT', DEFAULTS.port, 0, 65_535),
+    fallbackToRandomPort: process.env['MINECRAFT_EDU_WS_PORT_FALLBACK'] !== '0',
     commandTimeoutMs: readInt('MINECRAFT_EDU_COMMAND_TIMEOUT_MS', DEFAULTS.commandTimeoutMs, 500, 120_000),
     eventBufferSize: readInt('MINECRAFT_EDU_EVENT_BUFFER', DEFAULTS.eventBufferSize, 10, 20_000),
     maxBuildBlocks: readInt('MINECRAFT_EDU_MAX_BUILD_BLOCKS', DEFAULTS.maxBuildBlocks, 1, 5_000_000),
@@ -55,6 +60,7 @@ export function composeRuntime(version: string, config: RuntimeConfig, connectio
     createWsMinecraftConnection({
       host: config.host,
       port: config.port,
+      fallbackToRandomPort: config.fallbackToRandomPort,
       commandTimeoutMs: config.commandTimeoutMs,
       eventBufferSize: config.eventBufferSize,
       debugFrames: config.debugFrames,
