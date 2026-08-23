@@ -89,10 +89,10 @@ function attachFakeGame(socket: WebSocket): void {
 }
 
 async function startEncryptedHarness(): Promise<MinecraftConnection> {
-  const port = 28_000 + Math.floor(Math.random() * 1_500);
   const connection = createWsMinecraftConnection({
     host: '127.0.0.1',
-    port,
+    port: 0,
+    fallbackToRandomPort: false,
     commandTimeoutMs: 2000,
     eventBufferSize: 20,
     debugFrames: false,
@@ -101,6 +101,7 @@ async function startEncryptedHarness(): Promise<MinecraftConnection> {
   active = connection;
   await connection.start();
 
+  const port = connection.status().port;
   const socket = new WebSocket(`ws://127.0.0.1:${String(port)}`);
   client = socket;
   // 伺服器一收到連線就立刻送出握手，所以 handler 必須在 open 之前就掛好，
@@ -142,10 +143,10 @@ describe('websocket 加密握手', () => {
   });
 
   it('遊戲不回應握手時退回明文而不是卡死', async () => {
-    const port = 29_500 + Math.floor(Math.random() * 400);
     const connection = createWsMinecraftConnection({
       host: '127.0.0.1',
-      port,
+      port: 0,
+      fallbackToRandomPort: false,
       commandTimeoutMs: 1000,
       eventBufferSize: 20,
       debugFrames: false,
@@ -154,6 +155,7 @@ describe('websocket 加密握手', () => {
     active = connection;
     await connection.start();
 
+    const port = connection.status().port;
     const socket = new WebSocket(`ws://127.0.0.1:${String(port)}`);
     client = socket;
     await new Promise<void>((resolve, reject) => {

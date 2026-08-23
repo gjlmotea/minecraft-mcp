@@ -44,13 +44,16 @@ const BUILD_TIMEOUT_MS = 300_000;
 
 const transport = new StdioClientTransport({
   command: process.execPath,
-  args: ['dist/index.js'],
+  args: ['scripts/launch-mcp.mjs'],
   cwd: projectRoot,
   stderr: 'pipe',
   env: {
     ...getDefaultEnvironment(),
     MINECRAFT_EDU_WS_HOST: '127.0.0.1',
     MINECRAFT_EDU_WS_PORT: port,
+    ...(process.env.MINECRAFT_EDU_WS_PORT_FALLBACK === undefined
+      ? {}
+      : { MINECRAFT_EDU_WS_PORT_FALLBACK: process.env.MINECRAFT_EDU_WS_PORT_FALLBACK }),
     // getDefaultEnvironment() 只帶最小安全集合，這兩個必須明確轉發，
     // 否則在外層設了也不會生效——診斷時會誤以為除錯輸出壞掉。
     ...(process.env.MINECRAFT_EDU_DEBUG_FRAMES === undefined

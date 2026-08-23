@@ -4,7 +4,7 @@
  * 事件緩衝，以及「回應的 requestId 對不上」時的歸屬行為。
  */
 
-import { WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createWsMinecraftConnection } from '../../src/adapters/ws-minecraft-connection.js';
@@ -15,10 +15,6 @@ const ZERO_REQUEST_ID = '00000000-0000-0000-0000-000000000000';
 let active: MinecraftConnection | null = null;
 let client: WebSocket | null = null;
 
-function pickPort(): number {
-  return 24_000 + Math.floor(Math.random() * 4_000);
-}
-
 interface Harness {
   readonly connection: MinecraftConnection;
   readonly socket: WebSocket;
@@ -27,10 +23,10 @@ interface Harness {
 }
 
 async function startHarness(): Promise<Harness> {
-  const port = pickPort();
   const connection = createWsMinecraftConnection({
     host: '127.0.0.1',
-    port,
+    port: 0,
+    fallbackToRandomPort: false,
     commandTimeoutMs: 1500,
     eventBufferSize: 50,
     debugFrames: false,
@@ -39,6 +35,7 @@ async function startHarness(): Promise<Harness> {
   active = connection;
   await connection.start();
 
+  const port = connection.status().port;
   const socket = new WebSocket(`ws://127.0.0.1:${String(port)}`);
   client = socket;
   await new Promise<void>((resolve, reject) => {
@@ -81,6 +78,108 @@ describe('ws adapter', () => {
     const status = harness.connection.status();
     expect(status.connected).toBe(true);
     expect(status.connectCommand).toBe(`/connect 127.0.0.1:${String(status.port)}`);
+  });
+
+  it('優先埠已占用時自動取得空閒埠並回報實際 /connect 指令', async () => {
+    const reservation = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((resolve, reject) => {
+      reservation.once('listening', resolve);
+      reservation.once('error', reject);
+    });
+    const address = reservation.address();
+    if (address === null || typeof address === 'string') throw new Error('測試無法取得保留埠。');
+
+    const connection = createWsMinecraftConnection({
+      host: '127.0.0.1',
+      port: address.port,
+      fallbackToRandomPort: true,
+      commandTimeoutMs: 500,
+      eventBufferSize: 10,
+      debugFrames: false,
+      negotiateEncryption: false,
+    });
+    active = connection;
+
+    try {
+      await connection.start();
+      const status = connection.status();
+      expect(status.listening).toBe(true);
+      expect(status.port).not.toBe(address.port);
+      expect(status.connectCommand).toBe(`/connect 127.0.0.1:${String(status.port)}`);
+
+      const game = new WebSocket(`ws://127.0.0.1:${String(status.port)}`);
+      client = game;
+      await new Promise<void>((resolve, reject) => {
+        game.once('open', resolve);
+        game.once('error', reject);
+      });
+      await expect(connection.awaitConnection(2000)).resolves.toMatchObject({ connected: true });
+    } finally {
+      client?.terminate();
+      client = null;
+      await connection.close().catch(() => undefined);
+      active = null;
+      await new Promise<void>((resolve) => reservation.close(() => resolve()));
+    }
+  });
+
+  it('遊戲重連後關閉會終止所有 client 並立即釋放監聽埠', async () => {
+    const harness = await startHarness();
+    const original = harness.socket;
+    const port = harness.connection.status().port;
+    let replacement: WebSocket | null = null;
+    let probe: MinecraftConnection | null = null;
+
+    try {
+      replacement = new WebSocket(`ws://127.0.0.1:${String(port)}`);
+      client = replacement;
+      await new Promise<void>((resolve, reject) => {
+        replacement?.once('open', resolve);
+        replacement?.once('error', reject);
+      });
+
+      await harness.connection.close();
+      active = null;
+
+      probe = createWsMinecraftConnection({
+        host: '127.0.0.1',
+        port,
+        fallbackToRandomPort: false,
+        commandTimeoutMs: 500,
+        eventBufferSize: 10,
+        debugFrames: false,
+        negotiateEncryption: false,
+      });
+      await probe.start();
+      expect(probe.status().listening).toBe(true);
+    } finally {
+      original.terminate();
+      replacement?.terminate();
+      client = null;
+      await probe?.close();
+      await harness.connection.close().catch(() => undefined);
+      active = null;
+    }
+  });
+
+  it('關閉橋接會立即結束尚在等待的連線請求', async () => {
+    const connection = createWsMinecraftConnection({
+      host: '127.0.0.1',
+      port: 0,
+      fallbackToRandomPort: false,
+      commandTimeoutMs: 500,
+      eventBufferSize: 10,
+      debugFrames: false,
+      negotiateEncryption: false,
+    });
+    active = connection;
+    await connection.start();
+
+    const waiting = connection.awaitConnection(120_000);
+    await connection.close();
+    active = null;
+
+    await expect(waiting).resolves.toMatchObject({ listening: false, connected: false });
   });
 
   it('以 requestId 正確對應回應', async () => {
@@ -241,14 +340,14 @@ describe('ws adapter', () => {
   });
 
   it('未連線時 runCommand 丟出帶連線指示的錯誤', async () => {
-    const port = pickPort();
     const connection = createWsMinecraftConnection({
       host: '127.0.0.1',
-      port,
+      port: 0,
+      fallbackToRandomPort: false,
       commandTimeoutMs: 500,
       eventBufferSize: 10,
       debugFrames: false,
-    negotiateEncryption: false,
+      negotiateEncryption: false,
     });
     active = connection;
     await connection.start();

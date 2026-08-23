@@ -20,9 +20,7 @@
  * 因為部分失敗（例如方塊已存在）常常不是中止的理由。
  */
 
-import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -36,18 +34,21 @@ if (planPath === undefined) {
 
 const plan = JSON.parse(readFileSync(planPath, 'utf8'));
 const projectRoot = fileURLToPath(new URL('..', import.meta.url));
-const port = process.env.MINECRAFT_EDU_WS_PORT ?? '19131';
+const preferredPort = process.env.MINECRAFT_EDU_WS_PORT ?? '19131';
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 const transport = new StdioClientTransport({
   command: process.execPath,
-  args: ['dist/index.js'],
+  args: ['scripts/launch-mcp.mjs'],
   cwd: projectRoot,
   stderr: 'pipe',
   env: {
     ...getDefaultEnvironment(),
     MINECRAFT_EDU_WS_HOST: '127.0.0.1',
-    MINECRAFT_EDU_WS_PORT: port,
+    MINECRAFT_EDU_WS_PORT: preferredPort,
+    ...(process.env.MINECRAFT_EDU_WS_PORT_FALLBACK === undefined
+      ? {}
+      : { MINECRAFT_EDU_WS_PORT_FALLBACK: process.env.MINECRAFT_EDU_WS_PORT_FALLBACK }),
     ...(process.env.MINECRAFT_EDU_DEBUG_FRAMES === undefined
       ? {}
       : { MINECRAFT_EDU_DEBUG_FRAMES: process.env.MINECRAFT_EDU_DEBUG_FRAMES }),
@@ -69,18 +70,9 @@ try {
     process.stdout.write(
       `\n橋接已監聽。請在遊戲聊天列輸入：\n\n    ${status.structuredContent?.connectCommand}\n\n等待連線…\n\n`,
     );
-    // Windows 上可以直接替使用者在遊戲裡打 /connect。失敗不致命——
-    // 退回原本的人工流程即可，訊息已經印在上面。
-    if (plan.autoConnect !== false && process.platform === 'win32') {
-      const script = join(projectRoot, 'scripts', 'auto-connect.ps1');
-      const attempt = spawnSync(
-        'powershell',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Port', String(port)],
-        { encoding: 'utf8' },
-      );
-      const detail = (attempt.stdout || attempt.stderr || '').trim().split('\n')[0] ?? '';
+    if (plan.autoConnect === true) {
       process.stdout.write(
-        attempt.status === 0 ? `  · 自動連線：${detail}\n\n` : `  · 自動連線失敗，請手動輸入：${detail}\n\n`,
+        '  · autoConnect 已停用：BlockHand 不會操作前景視窗或鍵盤，請手動輸入上方指令。\n\n',
       );
     }
 
