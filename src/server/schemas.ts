@@ -217,6 +217,38 @@ export const shapeSchema = () =>
         thickness: z.number().int().min(1).max(7).default(1),
       })
       .strict(),
+    z
+      .object({
+        kind: z.literal('curve'),
+        points: z
+          .array(vec3Schema())
+          .min(2)
+          .max(64)
+          .describe('曲線會平滑通過每一個控制點，不是折線'),
+        thickness: z.number().int().min(1).max(7).default(1),
+        closed: z.boolean().default(false).describe('true 時首尾相接成封閉迴圈'),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('revolution'),
+        center: vec3Schema(),
+        axis: axisSchema().default('y'),
+        profile: z
+          .array(
+            z
+              .object({
+                along: z.number().int().describe('沿軸位置，相對 center'),
+                radius: z.number().min(0).max(128).describe('該高度的半徑'),
+              })
+              .strict(),
+          )
+          .min(2)
+          .max(64)
+          .describe('側面輪廓；半徑在相鄰點之間線性內插，可蓋花瓶、塔樓、圓頂'),
+        hollow: z.boolean().default(false).describe('true 只留側面殼層'),
+      })
+      .strict(),
   ]);
 
 /* ────────────────────────── Agent 程式 ────────────────────────── */

@@ -23,6 +23,8 @@ export const SHAPE_KINDS = [
   'disk',
   'torus',
   'helix',
+  'curve',
+  'revolution',
 ] as const;
 export type ShapeKind = (typeof SHAPE_KINDS)[number];
 
@@ -96,6 +98,41 @@ export interface HelixShape {
   readonly thickness: number;
 }
 
+/**
+ * 通過控制點的平滑曲線（Catmull-Rom）。
+ *
+ * 跟 line 的差別：line 是兩點之間的直線，curve 會「穿過」你給的每一個控制點
+ * 並在之間補出平滑轉折。拿來蓋河道、道路、藤蔓、纜線這種不該是折線的東西。
+ */
+export interface CurveShape {
+  readonly kind: 'curve';
+  readonly points: readonly Vec3[];
+  readonly thickness: number;
+  /** true 時首尾相接成封閉迴圈。 */
+  readonly closed: boolean;
+}
+
+/** 旋轉體的側面輪廓取樣點：距軸心半徑，以及沿軸的位置。 */
+export interface RevolutionProfilePoint {
+  readonly along: number;
+  readonly radius: number;
+}
+
+/**
+ * 旋轉體：把一條側面輪廓繞軸旋轉一圈。
+ *
+ * 半徑在相鄰輪廓點之間線性內插，所以少數幾個點就能長出花瓶、塔樓、圓頂、
+ * 高腳杯這類「圓的但粗細會變」的量體——那是 cylinder 與 cone 都做不到的。
+ */
+export interface RevolutionShape {
+  readonly kind: 'revolution';
+  readonly center: Vec3;
+  readonly axis: Axis;
+  readonly profile: readonly RevolutionProfilePoint[];
+  /** true 只留側面殼層，false 每一層都填實。 */
+  readonly hollow: boolean;
+}
+
 export type ShapeSpec =
   | LineShape
   | BoxShape
@@ -106,7 +143,9 @@ export type ShapeSpec =
   | PyramidShape
   | DiskShape
   | TorusShape
-  | HelixShape;
+  | HelixShape
+  | CurveShape
+  | RevolutionShape;
 
 /** 掃描體積硬上限，避免呼叫端用一個荒謬半徑把行程撐爆。 */
 export const MAX_SCAN_VOLUME = 8_000_000;
@@ -450,6 +489,103 @@ export function generateShape(spec: ShapeSpec): Vec3[] {
       return dedupe(thicken(dedupe(raw), thickness));
     }
 
+    case 'curve': {
+      const thickness = assertPositive(spec.thickness, '線寬', 7);
+      const control = spec.points;
+      if (control.length < 2) {
+        throw new MinecraftBridgeError('invalid-shape', '曲線至少需要 2 個控制點。');
+      }
+      if (control.length > 64) {
+        throw new MinecraftBridgeError('shape-too-large', '曲線控制點上限 64 個。');
+      }
+
+      // Catmull-Rom 需要每段前後各一個額外控制點。開放曲線把端點複製一份當
+      // 虛擬鄰居，封閉曲線則環繞取用——否則頭尾兩段會少了張力而變成直線。
+      const size = control.length;
+      const at = (index: number): Vec3 => {
+        if (spec.closed) return control[((index % size) + size) % size]!;
+        return control[Math.min(Math.max(index, 0), size - 1)]!;
+      };
+
+      const segments = spec.closed ? size : size - 1;
+      const raw: Vec3[] = [];
+      let sampled = 0;
+      for (let segment = 0; segment < segments; segment += 1) {
+        const p0 = at(segment - 1);
+        const p1 = at(segment);
+        const p2 = at(segment + 1);
+        const p3 = at(segment + 2);
+        // 取樣密度跟著段長走：短段不必浪費、長段不會出現斷點。
+        const span = Math.hypot(p2.x - p1.x, p2.y - p1.y, p2.z - p1.z);
+        const steps = Math.max(2, Math.ceil(span * 3));
+        sampled += steps;
+        if (sampled > 60_000) {
+          throw new MinecraftBridgeError('shape-too-large', '曲線取樣點過多；請減少控制點或縮短距離。');
+        }
+        for (let step = 0; step < steps; step += 1) {
+          const t = step / steps;
+          raw.push({
+            x: Math.round(catmullRom(p0.x, p1.x, p2.x, p3.x, t)),
+            y: Math.round(catmullRom(p0.y, p1.y, p2.y, p3.y, t)),
+            z: Math.round(catmullRom(p0.z, p1.z, p2.z, p3.z, t)),
+          });
+        }
+      }
+      if (!spec.closed) raw.push(at(size - 1));
+      return dedupe(thicken(dedupe(raw), thickness));
+    }
+
+    case 'revolution': {
+      const profile = spec.profile;
+      if (profile.length < 2) {
+        throw new MinecraftBridgeError('invalid-shape', '旋轉體輪廓至少需要 2 個取樣點。');
+      }
+      if (profile.length > 64) {
+        throw new MinecraftBridgeError('shape-too-large', '旋轉體輪廓點上限 64 個。');
+      }
+      // 依 along 排序，呼叫端不必自己保證順序；相同 along 會讓內插除以零。
+      const sorted = [...profile].sort((left, right) => left.along - right.along);
+      for (const point of sorted) {
+        if (!Number.isFinite(point.along) || !Number.isFinite(point.radius)) {
+          throw new MinecraftBridgeError('invalid-shape', '旋轉體輪廓含非有限數值。');
+        }
+        if (point.radius < 0) {
+          throw new MinecraftBridgeError('invalid-shape', '旋轉體半徑不可為負。');
+        }
+        if (point.radius > 128) {
+          throw new MinecraftBridgeError('shape-too-large', '旋轉體半徑上限 128。');
+        }
+      }
+      const first = sorted[0]!;
+      const last = sorted[sorted.length - 1]!;
+      const lowest = Math.round(first.along);
+      const highest = Math.round(last.along);
+      if (highest - lowest > 384) {
+        throw new MinecraftBridgeError('shape-too-large', '旋轉體高度上限 384。');
+      }
+
+      const raw: Vec3[] = [];
+      for (let along = lowest; along <= highest; along += 1) {
+        const radius = interpolateRadius(sorted, along);
+        if (radius < 0.5) {
+          raw.push(fromAxisComponents(spec.center, spec.axis, along, 0, 0));
+          continue;
+        }
+        const span = Math.ceil(radius);
+        const outer = radius * radius + radius * 0.5;
+        const inner = (radius - 1) * (radius - 1);
+        for (let v = -span; v <= span; v += 1) {
+          for (let u = -span; u <= span; u += 1) {
+            const distance = u * u + v * v;
+            if (distance > outer) continue;
+            if (spec.hollow && distance < inner) continue;
+            raw.push(fromAxisComponents(spec.center, spec.axis, along, u, v));
+          }
+        }
+      }
+      return dedupe(raw);
+    }
+
     default: {
       const exhaustive: never = spec;
       throw new MinecraftBridgeError('invalid-shape', `未知形狀：${JSON.stringify(exhaustive)}`);
@@ -483,6 +619,34 @@ function axialBounds(
     min: { x: center.x - planarSpan, y: center.y - planarSpan, z: center.z + startAlong },
     max: { x: center.x + planarSpan, y: center.y + planarSpan, z: center.z + endAlong },
   };
+}
+
+/** Catmull-Rom 單軸取值。t 在 [0,1)，曲線保證通過 p1 與 p2。 */
+function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return (
+    0.5 *
+    (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
+  );
+}
+
+/** 在排序過的輪廓上依 along 線性內插半徑；超出兩端則夾到端點值。 */
+function interpolateRadius(profile: readonly RevolutionProfilePoint[], along: number): number {
+  const first = profile[0]!;
+  const last = profile[profile.length - 1]!;
+  if (along <= first.along) return first.radius;
+  if (along >= last.along) return last.radius;
+  for (let index = 1; index < profile.length; index += 1) {
+    const previous = profile[index - 1]!;
+    const current = profile[index]!;
+    if (along > current.along) continue;
+    const span = current.along - previous.along;
+    if (span === 0) return current.radius;
+    const ratio = (along - previous.along) / span;
+    return previous.radius + (current.radius - previous.radius) * ratio;
+  }
+  return last.radius;
 }
 
 function fromAxisComponents(center: Vec3, axis: Axis, along: number, u: number, v: number): Vec3 {

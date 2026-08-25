@@ -72,6 +72,7 @@ describe('MCP 工具面', () => {
       'mc_build_preview',
       'mc_build_shape',
       'mc_clone',
+      'mc_compare_regions',
       'mc_effect',
       'mc_events_catalog',
       'mc_events_poll',
@@ -84,6 +85,7 @@ describe('MCP 工具面', () => {
       'mc_message',
       'mc_player_action',
       'mc_query_target',
+      'mc_read_block',
       'mc_run_command',
       'mc_run_commands',
       'mc_set_block',
@@ -95,7 +97,7 @@ describe('MCP 工具面', () => {
       'mc_ticking_area',
       'mc_world_settings',
     ]);
-    expect(names).toHaveLength(38);
+    expect(names).toHaveLength(40);
   });
 
   it('mc_status 回報連線資訊', async () => {

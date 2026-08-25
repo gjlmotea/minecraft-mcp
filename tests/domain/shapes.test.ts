@@ -180,3 +180,210 @@ describe('generateShape', () => {
     ).toThrow(/超過上限/);
   });
 });
+
+describe('generateShape：curve', () => {
+  const has = (points: readonly { x: number; y: number; z: number }[], target: { x: number; y: number; z: number }) =>
+    points.some((point) => point.x === target.x && point.y === target.y && point.z === target.z);
+
+  it('曲線通過每一個控制點——這是它跟折線最重要的差別', () => {
+    const control = [
+      { x: 0, y: 64, z: 0 },
+      { x: 10, y: 68, z: 4 },
+      { x: 20, y: 64, z: 0 },
+    ];
+    const points = generateShape({ kind: 'curve', points: control, thickness: 1, closed: false });
+    for (const target of control) {
+      expect(has(points, target), `缺少控制點 ${JSON.stringify(target)}`).toBe(true);
+    }
+  });
+
+  it('中段會偏離直線，證明真的有平滑而不是直接連線', () => {
+    const straight = generateShape({
+      kind: 'line',
+      from: { x: 0, y: 64, z: 0 },
+      to: { x: 20, y: 64, z: 0 },
+    });
+    const curved = generateShape({
+      kind: 'curve',
+      points: [
+        { x: 0, y: 64, z: 0 },
+        { x: 10, y: 70, z: 0 },
+        { x: 20, y: 64, z: 0 },
+      ],
+      thickness: 1,
+      closed: false,
+    });
+    const highest = Math.max(...curved.map((point) => point.y));
+    expect(highest).toBeGreaterThanOrEqual(70);
+    expect(Math.max(...straight.map((point) => point.y))).toBe(64);
+  });
+
+  it('封閉曲線會繞回起點附近，開放曲線不會', () => {
+    const control = [
+      { x: 0, y: 64, z: 0 },
+      { x: 12, y: 64, z: 0 },
+      { x: 12, y: 64, z: 12 },
+      { x: 0, y: 64, z: 12 },
+    ];
+    const closed = generateShape({ kind: 'curve', points: control, thickness: 1, closed: true });
+    const open = generateShape({ kind: 'curve', points: control, thickness: 1, closed: false });
+    // 封閉版必須補出第四段（從最後一點回到第一點），所以格數更多。
+    expect(closed.length).toBeGreaterThan(open.length);
+    // 回程段落在 x ≤ 0 那一側（Catmull-Rom 的張力會讓它略為外凸，所以不能
+    // 寫死座標）。開放版永遠不會有那一段。
+    const onReturnLeg = (point: { x: number; z: number }) => point.x <= 0 && point.z === 6;
+    expect(closed.some(onReturnLeg)).toBe(true);
+    expect(open.some(onReturnLeg)).toBe(false);
+  });
+
+  it('加粗會變多但不重複', () => {
+    const thin = generateShape({
+      kind: 'curve',
+      points: [
+        { x: 0, y: 64, z: 0 },
+        { x: 16, y: 64, z: 0 },
+      ],
+      thickness: 1,
+      closed: false,
+    });
+    const thick = generateShape({
+      kind: 'curve',
+      points: [
+        { x: 0, y: 64, z: 0 },
+        { x: 16, y: 64, z: 0 },
+      ],
+      thickness: 3,
+      closed: false,
+    });
+    expect(thick.length).toBeGreaterThan(thin.length);
+    const keys = new Set(thick.map((point) => `${point.x},${point.y},${point.z}`));
+    expect(keys.size).toBe(thick.length);
+  });
+
+  it('少於 2 個控制點直接拒絕', () => {
+    expect(() =>
+      generateShape({ kind: 'curve', points: [ORIGIN], thickness: 1, closed: false }),
+    ).toThrow(MinecraftBridgeError);
+  });
+});
+
+describe('generateShape：revolution', () => {
+  const widthAt = (points: readonly { x: number; y: number; z: number }[], y: number) => {
+    const layer = points.filter((point) => point.y === y);
+    if (layer.length === 0) return 0;
+    return Math.max(...layer.map((point) => point.x)) - Math.min(...layer.map((point) => point.x)) + 1;
+  };
+
+  it('半徑隨輪廓變化——這是 cylinder 與 cone 都做不到的', () => {
+    const points = generateShape({
+      kind: 'revolution',
+      center: ORIGIN,
+      axis: 'y',
+      hollow: false,
+      profile: [
+        { along: 0, radius: 6 },
+        { along: 5, radius: 2 },
+        { along: 10, radius: 7 },
+      ],
+    });
+    const bottom = widthAt(points, 64);
+    const waist = widthAt(points, 69);
+    const top = widthAt(points, 74);
+    expect(waist).toBeLessThan(bottom);
+    expect(waist).toBeLessThan(top);
+  });
+
+  it('相鄰輪廓點之間會線性內插，不是階梯', () => {
+    const points = generateShape({
+      kind: 'revolution',
+      center: ORIGIN,
+      axis: 'y',
+      hollow: false,
+      profile: [
+        { along: 0, radius: 2 },
+        { along: 10, radius: 12 },
+      ],
+    });
+    const widths = [0, 2, 4, 6, 8, 10].map((offset) => widthAt(points, 64 + offset));
+    for (let index = 1; index < widths.length; index += 1) {
+      expect(widths[index]).toBeGreaterThan(widths[index - 1]!);
+    }
+  });
+
+  it('hollow 只留殼層，中心是空的', () => {
+    const solid = generateShape({
+      kind: 'revolution',
+      center: ORIGIN,
+      axis: 'y',
+      hollow: false,
+      profile: [
+        { along: 0, radius: 8 },
+        { along: 6, radius: 8 },
+      ],
+    });
+    const shell = generateShape({
+      kind: 'revolution',
+      center: ORIGIN,
+      axis: 'y',
+      hollow: true,
+      profile: [
+        { along: 0, radius: 8 },
+        { along: 6, radius: 8 },
+      ],
+    });
+    expect(shell.length).toBeLessThan(solid.length);
+    const centreInShell = shell.some((point) => point.x === 0 && point.z === 0 && point.y === 67);
+    expect(centreInShell).toBe(false);
+  });
+
+  it('輪廓點順序顛倒結果相同，呼叫端不必自己排序', () => {
+    const ascending = generateShape({
+      kind: 'revolution',
+      center: ORIGIN,
+      axis: 'y',
+      hollow: false,
+      profile: [
+        { along: 0, radius: 3 },
+        { along: 8, radius: 9 },
+      ],
+    });
+    const descending = generateShape({
+      kind: 'revolution',
+      center: ORIGIN,
+      axis: 'y',
+      hollow: false,
+      profile: [
+        { along: 8, radius: 9 },
+        { along: 0, radius: 3 },
+      ],
+    });
+    expect(descending.length).toBe(ascending.length);
+  });
+
+  it('負半徑與過大半徑都拒絕', () => {
+    expect(() =>
+      generateShape({
+        kind: 'revolution',
+        center: ORIGIN,
+        axis: 'y',
+        hollow: false,
+        profile: [
+          { along: 0, radius: -1 },
+          { along: 4, radius: 3 },
+        ],
+      }),
+    ).toThrow(MinecraftBridgeError);
+    expect(() =>
+      generateShape({
+        kind: 'revolution',
+        center: ORIGIN,
+        axis: 'y',
+        hollow: false,
+        profile: [
+          { along: 0, radius: 3 },
+          { along: 4, radius: 999 },
+        ],
+      }),
+    ).toThrow(MinecraftBridgeError);
+  });
+});

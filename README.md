@@ -4,8 +4,8 @@
 
 透過 Minecraft Education 官方文件化的 `/wsserver` 連線命令（`/connect` 是 alias）操作，不注入行程、不改遊戲檔案、不用畫面辨識。連線命令是官方介面；後續 WebSocket 訊息協定並沒有公開穩定性保證，因此遊戲改版後仍需重新驗證。
 
-- 38 個工具、2 份 resource
-- 142 項單元與整合測試、1 支不需開遊戲的 stdio／程序生命週期 smoke、1 支真機 live 驗證
+- 40 個工具、2 份 resource
+- 161 項單元與整合測試、1 支不需開遊戲的 stdio／程序生命週期 smoke、1 支真機 live 驗證
 - 不需要任何帳號、token 或祕密；MCP runtime 只綁 loopback，不寫遊戲檔或 artifact
 
 ---
@@ -56,7 +56,7 @@ corepack pnpm run doctor          # 加 --client=claude 等可診斷其他家
 安裝器不是只把指令寫進設定檔，它會：
 
 - **自動填入這台機器的絕對 Node 路徑**，不依賴桌面程式能否讀到 nvm、Homebrew 或 shell PATH。
-- **先跑一次真正的 MCP initialize**（用即將寫入的 command／args／env），確認 38 個工具都在，才動任何持久設定。舊 dist、錯誤 launcher、不可執行的 Node 都會在寫入之前就失敗。
+- **先跑一次真正的 MCP initialize**（用即將寫入的 command／args／env），確認 40 個工具都在，才動任何持久設定。舊 dist、錯誤 launcher、不可執行的 Node 都會在寫入之前就失敗。
 - **已正確登記時什麼都不做**，重跑安全。
 - **同名但不相容時停下並列出差異**，不自動 remove/add，避免覆寫別人的 timeout、tool policy 或另一個 clone 的設定。
 - **只透過各家官方 `mcp add`／`mcp remove` 子指令寫入**，不手改設定檔——那會繞過各家自己的 schema 驗證與 scope 解析。
@@ -182,7 +182,7 @@ corepack pnpm run doctor
 corepack pnpm blockhand doctor --json
 ```
 
-doctor 不修改持久設定、不啟動 Minecraft；它會短暫建立隔離的 loopback socket，驗證 launcher、38 tools、2 resources、stdio EOF、監聽埠釋放，並以 Codex **實際登記的 command／args／env** 再完成一次 initialize，避免設定指向失效 Node 卻假綠。
+doctor 不修改持久設定、不啟動 Minecraft；它會短暫建立隔離的 loopback socket，驗證 launcher、40 tools、2 resources、stdio EOF、監聽埠釋放，並以 Codex **實際登記的 command／args／env** 再完成一次 initialize，避免設定指向失效 Node 卻假綠。
 
 遊戲開著、世界已載入、作弊已開之後：
 
@@ -234,11 +234,19 @@ cd gjlmotea/vibe/mcp/minecraft-edu && corepack pnpm run verify
 
 Agent 方向是**相對它自己的面向**，不是世界方位。
 
-### 世界（9）
+### 世界（11）
 
-`mc_set_block`、`mc_fill`、`mc_clone`、`mc_test_block`、`mc_query_target`、`mc_summon`、`mc_world_settings`（時間／天氣／遊戲規則／難度）、`mc_structure`（存讀結構）、`mc_ticking_area`。
+`mc_set_block`、`mc_fill`、`mc_clone`、`mc_test_block`、`mc_read_block`、`mc_compare_regions`、`mc_query_target`、`mc_summon`、`mc_world_settings`（時間／天氣／遊戲規則／難度）、`mc_structure`（存讀結構）、`mc_ticking_area`。
 
 `mc_query_target` 會把 `querytarget` 回傳的 JSON 字串解析好，這是取得玩家或 Agent 座標的正規做法——建造前先問它。
+
+**讀取這一塊有先天限制，講清楚比假裝沒有好。** Education 沒有「讀取任意方塊」的指令，所以：
+
+- `mc_test_block` 是是非題：你得先猜一個方塊 ID。
+- `mc_read_block` 不必猜——它拿空氣當哨兵去問，猜錯時遊戲訊息會把實際方塊講出來。但回傳的是**在地化顯示名稱**（「泥土」）而不是方塊 ID（`dirt`），不能餵回 `mc_set_block`。訊息格式沒有官方保證，解析不出來時回 `null` 並附原始訊息，不會亂猜。
+- `mc_compare_regions` 用一條 `testforblocks` 比對整片區域。逐格比對在幾百格以上就會撞到 host 逾時，這個不會。`masked` 模式忽略來源的空氣，適合檢查「該有的東西在不在」而不管周圍多了什麼——**批改學生作品**就是這個形狀。
+
+要逐格讀整片區域請走行為包與 Script API；本專案刻意不走那條路，因為那會讓學校電腦多一道安裝步驟。
 
 ### 玩家與回饋（7）
 
@@ -249,7 +257,7 @@ Agent 方向是**相對它自己的面向**，不是世界方位。
 | 工具 | 用途 |
 |---|---|
 | `mc_build_preview` | 只算不做：方塊數、邊界盒、fill 批次數 |
-| `mc_build_shape` | line／box／sphere／ellipsoid／cylinder／cone／pyramid／disk／torus／helix，多數支援 hollow |
+| `mc_build_shape` | line／box／sphere／ellipsoid／cylinder／cone／pyramid／disk／torus／helix／curve／revolution，多數支援 hollow |
 | `mc_blueprint_preview` | 逐格藍圖的預覽 |
 | `mc_build_blueprint` | 任意形狀：給「座標 → 方塊」清單，相同方塊自動合併 |
 

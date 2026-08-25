@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import type { BlockHandService } from '../../application/blockhand-service.js';
 import { parseQueryTargetDetails } from '../../application/blockhand-service.js';
+import { SENTINEL_BLOCK, readBlockFromOutcome } from '../../domain/block-report.js';
 import { worldCommands } from '../../domain/commands.js';
 import { assertPlaceableCoordinate } from '../../domain/coordinates.js';
 import { BLOCK_HANDLING_MODES, FILL_MODES } from '../../domain/contracts.js';
@@ -141,6 +142,90 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
         return ok(
           { ...outcomeToPayload(outcome), matches: outcome.ok },
           outcome.ok ? `符合：該座標是 ${block}。` : `不符合：${outcome.statusMessage ?? '該座標不是指定方塊'}`,
+        );
+      }),
+  );
+
+  server.registerTool(
+    'mc_read_block',
+    {
+      title: '讀取某座標實際是什麼方塊',
+      description:
+        '回報該座標實際上放著什麼，不需要你先猜。Education 沒有讀取方塊的指令，' +
+        '這裡是拿空氣當哨兵去 testforblock，猜錯時遊戲的訊息會把實際方塊講出來。' +
+        '注意：回傳的是**在地化顯示名稱**（例如「泥土」）而不是方塊 ID（dirt），' +
+        '不能直接餵回 mc_set_block；要用 ID 判斷請改用 mc_test_block。' +
+        '訊息格式沒有官方保證，解析不出來時 block 會是 null 並附上原始訊息，不會亂猜。',
+      inputSchema: z.object({ position: coordinateSchema() }).strict(),
+      outputSchema: commandOutcomeSchema()
+        .extend({
+          block: z.string().nullable(),
+          isAir: z.boolean(),
+          raw: z.string().nullable(),
+        })
+        .strict(),
+      annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ position }) =>
+      guard(async () => {
+        const outcome = await service.run(
+          worldCommands.testForBlock(toCoordinate(position), SENTINEL_BLOCK, null),
+        );
+        const reading = readBlockFromOutcome(outcome.ok, outcome.statusMessage ?? null);
+        const summary =
+          reading.isSentinel
+            ? '該座標是空氣（沒有方塊）。'
+            : reading.block === null
+              ? `讀不出方塊名稱；遊戲訊息：${reading.raw ?? '(無)'}`
+              : `該座標是 ${reading.block}。`;
+        return ok(
+          {
+            ...outcomeToPayload(outcome),
+            block: reading.block,
+            isAir: reading.isSentinel,
+            raw: reading.raw,
+          },
+          summary,
+        );
+      }),
+  );
+
+  server.registerTool(
+    'mc_compare_regions',
+    {
+      title: '比對兩個等大區域是否一致',
+      description:
+        '用一條指令比對整片區域，適合檢查學生蓋的東西跟參考範例是否相同。' +
+        '逐格比對在幾百格以上就會撞到 MCP host 逾時，這個不會。' +
+        'masked=true 會忽略來源區域裡的空氣，只檢查「該有的東西在不在」，' +
+        '不管周圍多了什麼；masked=false 則要求完全一致。' +
+        '兩個區域大小必須相同，destination 是目標區域的最小角。',
+      inputSchema: z
+        .object({
+          begin: coordinateSchema().describe('來源區域的一角'),
+          end: coordinateSchema().describe('來源區域的對角'),
+          destination: coordinateSchema().describe('目標區域的最小角'),
+          masked: z.boolean().default(false).describe('true 時忽略來源的空氣'),
+        })
+        .strict(),
+      outputSchema: commandOutcomeSchema().extend({ identical: z.boolean() }).strict(),
+      annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ begin, end, destination, masked }) =>
+      guard(async () => {
+        const outcome = await service.run(
+          worldCommands.testForBlocks(
+            toCoordinate(begin),
+            toCoordinate(end),
+            toCoordinate(destination),
+            masked,
+          ),
+        );
+        return ok(
+          { ...outcomeToPayload(outcome), identical: outcome.ok },
+          outcome.ok
+            ? `兩個區域一致${masked ? '（忽略空氣）' : ''}。`
+            : `不一致：${outcome.statusMessage ?? '區域內容有差異'}`,
         );
       }),
   );

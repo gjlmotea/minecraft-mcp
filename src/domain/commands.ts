@@ -222,6 +222,23 @@ export const worldCommands = {
     return join(['testforblock', formatCoordinate(position), ...blockToken(block, states)]);
   },
 
+  /**
+   * 比對兩個等大區域是否一致。
+   *
+   * 這是唯一能「一條指令比對整片區域」的原生指令；逐格 testforblock 在幾百格
+   * 以上就會撞到 MCP host 逾時。masked 模式把來源的空氣視為忽略，適合檢查
+   * 「該有的東西在不在」而不管周圍多了什麼。
+   */
+  testForBlocks(begin: Coordinate, end: Coordinate, destination: Coordinate, masked: boolean): string {
+    return join([
+      'testforblocks',
+      formatCoordinate(begin),
+      formatCoordinate(end),
+      formatCoordinate(destination),
+      masked ? 'masked' : 'all',
+    ]);
+  },
+
   queryTarget(selector: string): string {
     return `querytarget ${assertSelector(selector, '查詢目標')}`;
   },
