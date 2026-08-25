@@ -97,9 +97,10 @@ describe('MCP 工具面', () => {
       'mc_teleport',
       'mc_test_block',
       'mc_ticking_area',
+      'mc_verify_reading',
       'mc_world_settings',
     ]);
-    expect(names).toHaveLength(41);
+    expect(names).toHaveLength(42);
   });
 
   it('mc_status 回報連線資訊', async () => {

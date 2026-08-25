@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import type { BlockHandService } from '../../application/blockhand-service.js';
 import { analyzeSymmetry } from '../../application/symmetry-service.js';
+import { probeReadingPath } from '../../application/reading-probe.js';
 import { parseQueryTargetDetails } from '../../application/blockhand-service.js';
 import { SENTINEL_BLOCK, readBlockFromOutcome } from '../../domain/block-report.js';
 import { worldCommands } from '../../domain/commands.js';
@@ -15,7 +16,7 @@ import {
   coordinateSchema,
   selectorSchema,
 } from '../schemas.js';
-import { guard, ok, outcomeToPayload, summarizeOutcome, toCoordinate } from '../tool-kit.js';
+import { fail, guard, ok, outcomeToPayload, summarizeOutcome, toCoordinate } from '../tool-kit.js';
 
 export function registerWorldTools(server: McpServer, service: BlockHandService): void {
   server.registerTool(
@@ -239,7 +240,7 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
       inputSchema: z.object({ position: coordinateSchema() }).strict(),
       outputSchema: commandOutcomeSchema()
         .extend({
-          block: z.string().nullable(),
+          block: z.string().describe('在地化顯示名稱；解析不出來時本工具回錯誤而不是 null'),
           isAir: z.boolean(),
           raw: z.string().nullable(),
         })
@@ -252,12 +253,22 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
           worldCommands.testForBlock(toCoordinate(position), SENTINEL_BLOCK, null),
         );
         const reading = readBlockFromOutcome(outcome.ok, outcome.statusMessage ?? null);
-        const summary =
-          reading.isSentinel
-            ? '該座標是空氣（沒有方塊）。'
-            : reading.block === null
-              ? `讀不出方塊名稱；遊戲訊息：${reading.raw ?? '(無)'}`
-              : `該座標是 ${reading.block}。`;
+
+        // 解析失敗一律回錯誤，不回「成功但 block 是 null」。
+        //
+        // 這是刻意的：使用者是 AI，而 AI 不會懷疑系統壞掉。一個成功的回應配上
+        // block=null，很容易被讀成「讀到了，那裡是空的」，然後基於錯誤認知繼續
+        // 蓋東西——把學生的作品當空地覆蓋掉，而且事後沒有任何錯誤紀錄。
+        // 錯誤沒辦法被當成資料繼續用，這就是重點。
+        if (reading.block === null) {
+          return fail(
+            `讀不出 ${String(position.x)},${String(position.y)},${String(position.z)} 的方塊名稱。` +
+              '**這不代表那裡是空的**——是遊戲回的訊息格式不符合預期，本工具無法判定。' +
+              '最可能的原因是 Minecraft 改版改了訊息文字，或遊戲語言不是繁中／簡中／英文。' +
+              `請用 mc_verify_reading 確認解析路徑是否仍然有效。遊戲原始訊息：${reading.raw ?? '(無)'}`,
+          );
+        }
+
         return ok(
           {
             ...outcomeToPayload(outcome),
@@ -265,7 +276,53 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
             isAir: reading.isSentinel,
             raw: reading.raw,
           },
-          summary,
+          reading.isSentinel ? '該座標是空氣（沒有方塊）。' : `該座標是 ${reading.block}。`,
+        );
+      }),
+  );
+
+  server.registerTool(
+    'mc_verify_reading',
+    {
+      title: '驗證「讀方塊」這條路還有效',
+      description:
+        '讀方塊靠的是 testforblock **失敗訊息**會洩漏方塊名稱，而那個訊息格式沒有官方穩定性保證。' +
+        '遊戲改版改了文案、或遊戲語言不是繁中／簡中／英文，解析就會失效——而且失效的樣子是**安靜的**。' +
+        '這支探測會主動驗證解析路徑是否仍然有效，**上課前跑一次**就知道 mc_read_block 的結果能不能信。' +
+        '它不需要事先知道那格是什麼：若該格是空氣，就拿基岩去問（保證不符）逼出失敗訊息；' +
+        '若該格有東西，第一問就已經給了訊息。最多兩條指令，完全不寫入世界。' +
+        'parseable=false 代表協定已漂移，此時 mc_read_block 的結果一律不可信。',
+      inputSchema: z
+        .object({
+          position: coordinateSchema().describe('任一座標皆可，空的或有方塊都行'),
+        })
+        .strict(),
+      outputSchema: z
+        .object({
+          parseable: z.boolean().describe('false 代表協定已漂移，讀方塊不可信'),
+          parsedName: z.string().nullable(),
+          raw: z.string().nullable(),
+          branch: z.string(),
+          commandsIssued: z.number(),
+        })
+        .strict(),
+      annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ position }) =>
+      guard(async () => {
+        const report = await probeReadingPath(service, toCoordinate(position));
+        return ok(
+          {
+            parseable: report.parseable,
+            parsedName: report.parsedName,
+            raw: report.raw,
+            branch: report.branch,
+            commandsIssued: report.commandsIssued,
+          },
+          report.parseable
+            ? `解析路徑正常：從遊戲訊息成功讀出「${report.parsedName ?? ''}」。mc_read_block 可信。`
+            : '⚠️ 解析路徑已失效——遊戲訊息不符合任何已知格式。' +
+              `mc_read_block 的結果一律不可信，請勿據以判斷「那裡是空的」。原始訊息：${report.raw ?? '(無)'}`,
         );
       }),
   );
