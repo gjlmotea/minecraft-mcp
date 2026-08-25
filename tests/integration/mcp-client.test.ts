@@ -21,6 +21,7 @@ const CONFIG = {
   port: 19131,
   fallbackToRandomPort: true,
   commandTimeoutMs: 1000,
+  keepaliveIntervalMs: 30_000,
   eventBufferSize: 100,
   maxBuildBlocks: 200_000,
   stepDelayMs: 0,

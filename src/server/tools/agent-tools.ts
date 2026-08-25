@@ -25,7 +25,7 @@ export function registerAgentTools(server: McpServer, service: BlockHandService)
       title: '召喚 Agent',
       description: `在玩家旁邊生成 Agent。已存在時重複呼叫是安全的。${AGENT_NOTE}`,
       inputSchema: z.object({}).strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     },
     async () =>
@@ -42,12 +42,12 @@ export function registerAgentTools(server: McpServer, service: BlockHandService)
       description: `讓 Agent 往指定方向走 steps 格，每格一條指令。被方塊擋住時該步會失敗但不會中斷後續。${AGENT_NOTE}`,
       inputSchema: z
         .object({
-          direction: agentDirectionSchema,
+          direction: agentDirectionSchema(),
           steps: z.number().int().min(1).max(64).default(1),
           delayMs: z.number().int().min(0).max(2000).default(100).describe('每步間隔，給遊戲時間完成移動'),
         })
         .strict(),
-      outputSchema: batchOutcomeSchema,
+      outputSchema: batchOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ direction, steps, delayMs }) =>
@@ -65,11 +65,11 @@ export function registerAgentTools(server: McpServer, service: BlockHandService)
       description: `讓 Agent 原地左轉或右轉，每次 90 度。times=2 等於轉身。${AGENT_NOTE}`,
       inputSchema: z
         .object({
-          direction: turnDirectionSchema,
+          direction: turnDirectionSchema(),
           times: z.number().int().min(1).max(4).default(1),
         })
         .strict(),
-      outputSchema: batchOutcomeSchema,
+      outputSchema: batchOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ direction, times }) =>
@@ -86,7 +86,7 @@ export function registerAgentTools(server: McpServer, service: BlockHandService)
       title: 'Agent 傳送到玩家身邊',
       description: `把 Agent 叫到玩家旁邊。Agent 走丟、卡住或掉進洞裡時用這個回收。${AGENT_NOTE}`,
       inputSchema: z.object({}).strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     },
     async () =>
@@ -104,12 +104,12 @@ export function registerAgentTools(server: McpServer, service: BlockHandService)
       inputSchema: z
         .object({
           action: z.enum(['attack', 'destroy', 'till']),
-          direction: agentDirectionSchema.default('forward'),
+          direction: agentDirectionSchema().default('forward'),
           repeat: z.number().int().min(1).max(64).default(1),
           delayMs: z.number().int().min(0).max(2000).default(100),
         })
         .strict(),
-      outputSchema: batchOutcomeSchema,
+      outputSchema: batchOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
     },
     async ({ action, direction, repeat, delayMs }) =>
@@ -133,13 +133,13 @@ export function registerAgentTools(server: McpServer, service: BlockHandService)
       description: `從指定背包槽（1–27）取出方塊放到指定方向。槽位空的時候會失敗。${AGENT_NOTE}`,
       inputSchema: z
         .object({
-          slot: slotSchema,
-          direction: agentDirectionSchema.default('forward'),
+          slot: slotSchema(),
+          direction: agentDirectionSchema().default('forward'),
           repeat: z.number().int().min(1).max(64).default(1),
           delayMs: z.number().int().min(0).max(2000).default(100),
         })
         .strict(),
-      outputSchema: batchOutcomeSchema,
+      outputSchema: batchOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ slot, direction, repeat, delayMs }) =>
@@ -156,9 +156,9 @@ export function registerAgentTools(server: McpServer, service: BlockHandService)
       title: 'Agent 撿取掉落物',
       description: `撿取 Agent 附近的掉落物。item 留空代表全部撿。${AGENT_NOTE}`,
       inputSchema: z
-        .object({ item: blockNameSchema.nullable().default(null) })
+        .object({ item: blockNameSchema().nullable().default(null) })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ item }) =>
@@ -179,13 +179,13 @@ export function registerAgentTools(server: McpServer, service: BlockHandService)
       inputSchema: z
         .object({
           action: z.enum(['count', 'space', 'detail', 'drop', 'dropAll', 'transfer']),
-          slot: slotSchema.optional().describe('count／space／detail／drop 需要'),
-          quantity: quantitySchema.optional().describe('drop／transfer 需要'),
-          direction: agentDirectionSchema.optional().describe('drop／dropAll 需要'),
-          destinationSlot: slotSchema.optional().describe('transfer 需要'),
+          slot: slotSchema().optional().describe('count／space／detail／drop 需要'),
+          quantity: quantitySchema().optional().describe('drop／transfer 需要'),
+          direction: agentDirectionSchema().optional().describe('drop／dropAll 需要'),
+          destinationSlot: slotSchema().optional().describe('transfer 需要'),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ action, slot, quantity, direction, destinationSlot }) =>
@@ -232,10 +232,10 @@ export function registerAgentTools(server: McpServer, service: BlockHandService)
       inputSchema: z
         .object({
           mode: z.enum(['inspect', 'inspectData', 'detect', 'detectRedstone']).default('inspect'),
-          direction: agentDirectionSchema.default('forward'),
+          direction: agentDirectionSchema().default('forward'),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     },
     async ({ mode, direction }) =>
@@ -261,7 +261,7 @@ export function registerAgentTools(server: McpServer, service: BlockHandService)
         '把一連串 Agent 動作當成一支程式依序執行，這是讓 Agent 真正「做事」的主力工具：邊走邊鋪路、挖一條隧道、耕一整片田都用它。每步結果都會個別回報，可設定失敗即停。',
       inputSchema: z
         .object({
-          steps: z.array(agentProgramStepSchema).min(1).max(256),
+          steps: z.array(agentProgramStepSchema()).min(1).max(256),
           stopOnError: z.boolean().default(false),
           delayMs: z
             .number()
@@ -273,7 +273,7 @@ export function registerAgentTools(server: McpServer, service: BlockHandService)
             .describe('每步間隔；null 使用預設 100 ms'),
         })
         .strict(),
-      outputSchema: batchOutcomeSchema.extend({ commands: z.array(z.string()) }).strict(),
+      outputSchema: batchOutcomeSchema().extend({ commands: z.array(z.string()) }).strict(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
     },
     async ({ steps, stopOnError, delayMs }) =>

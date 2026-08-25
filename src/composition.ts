@@ -8,6 +8,7 @@ export interface RuntimeConfig {
   readonly port: number;
   readonly fallbackToRandomPort: boolean;
   readonly commandTimeoutMs: number;
+  readonly keepaliveIntervalMs: number;
   readonly eventBufferSize: number;
   readonly maxBuildBlocks: number;
   readonly stepDelayMs: number;
@@ -20,6 +21,7 @@ const DEFAULTS: RuntimeConfig = {
   port: 19131,
   fallbackToRandomPort: true,
   commandTimeoutMs: 10_000,
+  keepaliveIntervalMs: 30_000,
   eventBufferSize: 500,
   maxBuildBlocks: 200_000,
   stepDelayMs: 100,
@@ -44,6 +46,14 @@ export function readRuntimeConfig(): RuntimeConfig {
     port: readInt('MINECRAFT_EDU_WS_PORT', DEFAULTS.port, 0, 65_535),
     fallbackToRandomPort: process.env['MINECRAFT_EDU_WS_PORT_FALLBACK'] !== '0',
     commandTimeoutMs: readInt('MINECRAFT_EDU_COMMAND_TIMEOUT_MS', DEFAULTS.commandTimeoutMs, 500, 120_000),
+    // 閒置保活的探測間隔。調小可更快發現真的斷線，但會更常打擾遊戲；
+    // 主要存在理由是讓測試不必真的等 30 秒。
+    keepaliveIntervalMs: readInt(
+      'MINECRAFT_EDU_KEEPALIVE_INTERVAL_MS',
+      DEFAULTS.keepaliveIntervalMs,
+      1_000,
+      600_000,
+    ),
     eventBufferSize: readInt('MINECRAFT_EDU_EVENT_BUFFER', DEFAULTS.eventBufferSize, 10, 20_000),
     maxBuildBlocks: readInt('MINECRAFT_EDU_MAX_BUILD_BLOCKS', DEFAULTS.maxBuildBlocks, 1, 5_000_000),
     stepDelayMs: readInt('MINECRAFT_EDU_STEP_DELAY_MS', DEFAULTS.stepDelayMs, 0, 5_000),
@@ -62,6 +72,7 @@ export function composeRuntime(version: string, config: RuntimeConfig, connectio
       port: config.port,
       fallbackToRandomPort: config.fallbackToRandomPort,
       commandTimeoutMs: config.commandTimeoutMs,
+      keepaliveIntervalMs: config.keepaliveIntervalMs,
       eventBufferSize: config.eventBufferSize,
       debugFrames: config.debugFrames,
       negotiateEncryption: config.negotiateEncryption,

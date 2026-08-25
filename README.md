@@ -205,6 +205,7 @@ BlockHand 的管線是：
 | `MINECRAFT_EDU_WS_PORT` | `19131` | 優先監聽埠；實際值以 `mc_status` 回報為準 |
 | `MINECRAFT_EDU_WS_PORT_FALLBACK` | `1` | 優先埠被其他 MCP 任務占用時，由作業系統自動配一個空閒埠；設成 `0` 可要求占埠即失敗 |
 | `MINECRAFT_EDU_COMMAND_TIMEOUT_MS` | `10000` | 單一指令等待遊戲回應的逾時 |
+| `MINECRAFT_EDU_KEEPALIVE_INTERVAL_MS` | `30000` | 閒置時送出保活探測（`time query daytime`）的間隔。調小可更快發現真的斷線，代價是更常打擾遊戲 |
 | `MINECRAFT_EDU_EVENT_BUFFER` | `500` | 事件環形緩衝筆數 |
 | `MINECRAFT_EDU_MAX_BUILD_BLOCKS` | `200000` | 單次建造方塊數上限，超過即拒絕 |
 | `MINECRAFT_EDU_STEP_DELAY_MS` | `100` | Agent 程式每步預設間隔 |

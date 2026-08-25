@@ -38,6 +38,8 @@ export interface WsConnectionOptions {
   readonly port: number;
   readonly fallbackToRandomPort: boolean;
   readonly commandTimeoutMs: number;
+  /** 閒置保活探測的間隔；省略時用 HEARTBEAT_INTERVAL_MS。 */
+  readonly keepaliveIntervalMs?: number;
   readonly eventBufferSize: number;
   /** 把收到的每個原始封包印到 stderr，用於診斷協定行為。 */
   readonly debugFrames: boolean;
@@ -50,6 +52,8 @@ interface PendingRequest {
   readonly startedAt: number;
   readonly settle: (outcome: CommandOutcome) => void;
   readonly timer: NodeJS.Timeout;
+  /** 橋接自己發的保活探測，不算進 commandsIssued，也不參與 sole-pending 歸屬。 */
+  readonly internal: boolean;
 }
 
 interface IncomingMessage {
@@ -65,6 +69,18 @@ interface IncomingMessage {
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const ENCRYPTION_TIMEOUT_MS = 5_000;
 const BRIDGE_CLOSE_TIMEOUT_MS = 1500;
+/**
+ * 保活探測用的指令。
+ *
+ * 為什麼不能只靠 WebSocket ping：Education 的客戶端不回 pong frame。只用
+ * `ws` 的 ping/pong 判活，會在閒置 60 秒後把一條完全正常的連線 terminate 掉
+ * ——症狀是「放著不動就斷線」，而且斷線是橋接自己造成的。
+ *
+ * `time query daytime` 是唯讀、不寫世界、不在聊天欄留痕跡的指令，遊戲一定會回
+ * commandResponse，正好當作應用層的活性證據。
+ */
+const KEEPALIVE_COMMAND = 'time query daytime';
+const KEEPALIVE_TIMEOUT_MS = 10_000;
 
 export function createWsMinecraftConnection(options: WsConnectionOptions): MinecraftConnection {
   let server: WebSocketServer | null = null;
@@ -83,6 +99,10 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
   let connectionWaiters: Array<(status: ConnectionStatus) => void> = [];
   let heartbeat: NodeJS.Timeout | null = null;
   let alive = false;
+
+  const keepaliveIntervalMs = options.keepaliveIntervalMs ?? HEARTBEAT_INTERVAL_MS;
+  // 探測逾時不能超過週期太多，否則死連線的偵測延遲會由逾時主宰而不是週期。
+  const keepaliveTimeoutMs = Math.min(KEEPALIVE_TIMEOUT_MS, keepaliveIntervalMs * 2);
   /**
    * 握手完成前送出的指令會被遊戲靜默丟掉，所以任何公開操作都必須先等它結束。
    * 只在 attachSocket 設定，dispatch 本身不等（否則握手會等自己）。
@@ -194,6 +214,10 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
   }
 
   function handleMessage(data: Buffer): void {
+    // 任何進來的封包都是活性證據。Education 不回 pong frame，所以這裡是
+    // `alive` 唯一可靠的來源；少了這行，閒置的連線會被心跳誤判成死的。
+    alive = true;
+
     let raw: string;
     try {
       raw = session === null ? data.toString('utf8') : session.decrypt(data);
@@ -246,8 +270,10 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
       //
       // 指令實務上都是循序送出，所以「只剩一個待決請求」時把它歸給該請求，
       // 比讓它逾時誠實得多。歸屬方式會記進 log，不隱瞞這是推斷來的。
-      if (pending.size === 1) {
-        const soleRequestId = [...pending.keys()][0];
+      // 保活探測不參與這個推斷：它是橋接自己發的，不該去吃掉使用者指令的回應。
+      const attributable = [...pending.entries()].filter(([, request]) => !request.internal);
+      if (attributable.length === 1) {
+        const soleRequestId = attributable[0]?.[0];
         if (soleRequestId !== undefined) {
           log('info', 'correlated response by sole-pending fallback', {
             purpose,
@@ -268,10 +294,15 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
     }
   }
 
-  function dispatch(target: WebSocket, commandLine: string, timeoutMs: number): Promise<CommandOutcome> {
+  function dispatch(
+    target: WebSocket,
+    commandLine: string,
+    timeoutMs: number,
+    internal = false,
+  ): Promise<CommandOutcome> {
     const requestId = randomUUID();
     const startedAt = Date.now();
-    commandsIssued += 1;
+    if (!internal) commandsIssued += 1;
 
     return new Promise<CommandOutcome>((resolve) => {
       const timer = setTimeout(() => {
@@ -287,7 +318,7 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
       }, timeoutMs);
       timer.unref();
 
-      pending.set(requestId, { commandLine, startedAt, settle: resolve, timer });
+      pending.set(requestId, { commandLine, startedAt, settle: resolve, timer, internal });
 
       sendFrame(target, {
         header: {
@@ -489,14 +520,26 @@ export function createWsMinecraftConnection(options: WsConnectionOptions): Minec
       heartbeat = setInterval(() => {
         const active = socket;
         if (active === null || active.readyState !== 1) return;
-        if (!alive) {
-          log('error', 'heartbeat lost, terminating socket', {});
-          active.terminate();
-          return;
-        }
+
+        // 已經有請求在飛：回應本身就會證明活性，而且它各自帶逾時，
+        // 不需要（也不該）再插一條探測進去攪亂 sole-pending 歸屬。
+        if (pending.size > 0) return;
+
         alive = false;
-        active.ping();
-      }, HEARTBEAT_INTERVAL_MS);
+        active.ping(); // 對會回 pong 的客戶端仍然有效，是額外保險而非唯一依據。
+
+        // 判死掛在探測本身的逾時上，而不是等下一個週期：後者在探測逾時
+        // 遠大於週期時，會讓 pending 一直非空，心跳每次都提早 return，
+        // 死連線要拖到探測逾時才被發現。
+        void dispatch(active, KEEPALIVE_COMMAND, keepaliveTimeoutMs, true).then(() => {
+          if (socket !== active) return;
+          // handleMessage 收到任何封包都會把 alive 設回 true，
+          // 所以 alive 仍是 false 代表整段探測期間遊戲一個字都沒回。
+          if (alive) return;
+          log('error', 'keepalive unanswered, terminating socket', {});
+          active.terminate();
+        });
+      }, keepaliveIntervalMs);
       heartbeat.unref();
 
       log('info', 'websocket bridge listening', {

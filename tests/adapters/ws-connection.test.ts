@@ -339,6 +339,96 @@ describe('ws adapter', () => {
     expect(page.events[0]?.eventName).toBe('BlockPlaced');
   });
 
+  /**
+   * 回歸：舊版心跳只認 WebSocket 的 `pong` frame，而 Minecraft Education 的
+   * 客戶端根本不回 pong。結果是每條連線閒置滿兩個心跳週期後就被橋接自己
+   * terminate 掉——症狀是「放著不動就斷線」，而且看起來像遊戲的錯。
+   *
+   * 這個 harness 的假遊戲刻意不回 pong（ws 預設會自動回，所以要覆寫掉），
+   * 只回應 commandRequest。連線必須活過好幾個週期。
+   */
+  it('遊戲不回 pong frame 時，閒置連線不會被心跳誤殺', async () => {
+    const connection = createWsMinecraftConnection({
+      host: '127.0.0.1',
+      port: 0,
+      fallbackToRandomPort: false,
+      commandTimeoutMs: 1000,
+      keepaliveIntervalMs: 60,
+      eventBufferSize: 10,
+      debugFrames: false,
+      negotiateEncryption: false,
+    });
+    active = connection;
+    await connection.start();
+
+    // autoPong: false 是這條測試的重點——ws 預設會自動回 pong，
+    // 那樣就模擬不到 Education 的行為，測試會假通過。
+    const game = new WebSocket(`ws://127.0.0.1:${String(connection.status().port)}`, {
+      autoPong: false,
+    });
+    client = game;
+    await new Promise<void>((resolve, reject) => {
+      game.once('open', resolve);
+      game.once('error', reject);
+    });
+    await connection.awaitConnection(2000);
+
+    const keepalives: string[] = [];
+    game.on('message', (data: Buffer) => {
+      const frame = JSON.parse(data.toString()) as {
+        header: { requestId: string; messagePurpose: string };
+        body: { commandLine?: string };
+      };
+      if (frame.header.messagePurpose !== 'commandRequest') return;
+      keepalives.push(frame.body.commandLine ?? '');
+      game.send(
+        JSON.stringify({
+          header: { version: 1, requestId: frame.header.requestId, messagePurpose: 'commandResponse' },
+          body: { statusCode: 0, statusMessage: 'ok' },
+        }),
+      );
+    });
+
+    // 舊實作在第二個週期就會 terminate；這裡放行六個週期。
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    expect(connection.status().connected).toBe(true);
+    expect(keepalives.length).toBeGreaterThan(0);
+    // 保活探測必須是唯讀指令，不能改動世界。
+    expect(new Set(keepalives)).toEqual(new Set(['time query daytime']));
+    // 也不該灌水使用者可見的指令計數。
+    expect(connection.status().commandsIssued).toBe(0);
+  });
+
+  it('保活探測沒有回應時仍會斷開，不會留下殭屍連線', async () => {
+    const connection = createWsMinecraftConnection({
+      host: '127.0.0.1',
+      port: 0,
+      fallbackToRandomPort: false,
+      commandTimeoutMs: 1000,
+      keepaliveIntervalMs: 60,
+      eventBufferSize: 10,
+      debugFrames: false,
+      negotiateEncryption: false,
+    });
+    active = connection;
+    await connection.start();
+
+    // 完全裝死：不回 pong，也不回 commandResponse。
+    const game = new WebSocket(`ws://127.0.0.1:${String(connection.status().port)}`, {
+      autoPong: false,
+    });
+    client = game;
+    await new Promise<void>((resolve, reject) => {
+      game.once('open', resolve);
+      game.once('error', reject);
+    });
+    await connection.awaitConnection(2000);
+
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(connection.status().connected).toBe(false);
+  });
+
   it('未連線時 runCommand 丟出帶連線指示的錯誤', async () => {
     const connection = createWsMinecraftConnection({
       host: '127.0.0.1',

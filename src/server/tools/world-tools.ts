@@ -24,13 +24,13 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
         '在指定座標放一個方塊。大量方塊請改用 mc_fill 或 mc_build_shape——逐格呼叫這個工具會非常慢。',
       inputSchema: z
         .object({
-          position: coordinateSchema,
-          block: blockNameSchema,
-          blockStates: blockStatesSchema.nullable().default(null),
+          position: coordinateSchema(),
+          block: blockNameSchema(),
+          blockStates: blockStatesSchema().nullable().default(null),
           handling: z.enum(BLOCK_HANDLING_MODES).nullable().default(null),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true, openWorldHint: false },
     },
     async ({ position, block, blockStates, handling }) =>
@@ -52,16 +52,16 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
         '用同一種方塊填滿 from 到 to 的長方體。Bedrock 單次上限 32768 格；超過請改用 mc_build_shape，它會自動拆批。mode=hollow 只留外殼、outline 只留邊框。',
       inputSchema: z
         .object({
-          from: coordinateSchema,
-          to: coordinateSchema,
-          block: blockNameSchema,
-          blockStates: blockStatesSchema.nullable().default(null),
+          from: coordinateSchema(),
+          to: coordinateSchema(),
+          block: blockNameSchema(),
+          blockStates: blockStatesSchema().nullable().default(null),
           mode: z.enum(FILL_MODES).nullable().default(null),
-          replaceBlock: blockNameSchema.nullable().default(null).describe('只在 mode="replace" 時有效'),
-          replaceStates: blockStatesSchema.nullable().default(null),
+          replaceBlock: blockNameSchema().nullable().default(null).describe('只在 mode="replace" 時有效'),
+          replaceStates: blockStatesSchema().nullable().default(null),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true, openWorldHint: false },
     },
     async ({ from, to, block, blockStates, mode, replaceBlock, replaceStates }) =>
@@ -93,14 +93,14 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
         '把 begin–end 的區域複製到 destination。cloneMode="move" 會把原地清空。適合把手工蓋好的樣板量產。',
       inputSchema: z
         .object({
-          begin: coordinateSchema,
-          end: coordinateSchema,
-          destination: coordinateSchema,
+          begin: coordinateSchema(),
+          end: coordinateSchema(),
+          destination: coordinateSchema(),
           maskMode: z.enum(['replace', 'masked']).nullable().default(null),
           cloneMode: z.enum(['normal', 'force', 'move']).nullable().default(null),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
     },
     async ({ begin, end, destination, maskMode, cloneMode }) =>
@@ -125,12 +125,12 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
       description: '不改變世界，只回報該座標是否為指定方塊。建造前確認地形、或驗證剛才蓋的東西時用。',
       inputSchema: z
         .object({
-          position: coordinateSchema,
-          block: blockNameSchema,
-          blockStates: blockStatesSchema.nullable().default(null),
+          position: coordinateSchema(),
+          block: blockNameSchema(),
+          blockStates: blockStatesSchema().nullable().default(null),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema.extend({ matches: z.boolean() }).strict(),
+      outputSchema: commandOutcomeSchema().extend({ matches: z.boolean() }).strict(),
       annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     },
     async ({ position, block, blockStates }) =>
@@ -153,9 +153,9 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
         '用選擇器查詢實體的座標、朝向與唯一 ID，回傳已解析的 JSON。這是取得玩家或 Agent 目前位置的正規做法——建造前先問這個，才知道要蓋在哪裡。' +
         '預設用 @p（最近的玩家）而非 @s：WebSocket 送進來的指令沒有實體身分，@s 在部分情況下無法解析。',
       inputSchema: z
-        .object({ target: selectorSchema.default('@p') })
+        .object({ target: selectorSchema().default('@p') })
         .strict(),
-      outputSchema: commandOutcomeSchema.extend({ details: z.unknown() }).strict(),
+      outputSchema: commandOutcomeSchema().extend({ details: z.unknown() }).strict(),
       annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     },
     async ({ target }) =>
@@ -178,12 +178,12 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
       description: '在指定座標生成一個實體，可加名牌。position 留空則生在指令發起者位置。',
       inputSchema: z
         .object({
-          entity: blockNameSchema.describe('實體 ID，例如 cow 或 minecraft:villager'),
-          position: coordinateSchema.nullable().default(null),
+          entity: blockNameSchema().describe('實體 ID，例如 cow 或 minecraft:villager'),
+          position: coordinateSchema().nullable().default(null),
           nameTag: z.string().trim().min(1).max(64).nullable().default(null),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ entity, position, nameTag }) =>
@@ -209,7 +209,7 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
           durationSeconds: z.number().int().min(0).max(1_000_000).nullable().default(null),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     },
     async ({ setting, value, rule, durationSeconds }) =>
@@ -244,14 +244,14 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
         .object({
           action: z.enum(['save', 'load']),
           name: z.string().trim().min(1).max(64),
-          from: coordinateSchema.optional().describe('save 需要'),
-          to: coordinateSchema.optional().describe('save 需要'),
-          destination: coordinateSchema.optional().describe('load 需要'),
+          from: coordinateSchema().optional().describe('save 需要'),
+          to: coordinateSchema().optional().describe('save 需要'),
+          destination: coordinateSchema().optional().describe('load 需要'),
           includeEntities: z.boolean().default(false),
           saveMode: z.enum(['memory', 'disk']).default('disk'),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
     },
     async ({ action, name, from, to, destination, includeEntities, saveMode }) =>
@@ -285,12 +285,12 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
         '把一塊區域設為常載，讓玩家離開後那裡的機制仍會運作。Agent 要在遠處自動工作時需要這個。',
       inputSchema: z
         .object({
-          from: coordinateSchema,
-          to: coordinateSchema,
+          from: coordinateSchema(),
+          to: coordinateSchema(),
           name: z.string().trim().min(1).max(32).nullable().default(null),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     },
     async ({ from, to, name }) =>
