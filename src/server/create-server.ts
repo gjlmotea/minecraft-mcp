@@ -23,6 +23,7 @@ export function createMcpServer(options: {
         '大量方塊一律走 mc_build_shape 或 mc_build_blueprint，它們會把座標合併成最少的 fill；不要用迴圈逐格呼叫 mc_set_block。',
         'Agent 的方向是相對它自己的面向，不是世界方位；連續動作請用 mc_agent_program 一次送出。',
         'mc_run_command 是沒有專用工具時的後備，只接受單行指令，且永遠拒絕 wsserver／connect（那會切斷本橋接）。',
+        '讀方塊靠遊戲錯誤訊息的文字格式，遊戲改版或換語言就會失效。行為變得可疑時（讀不出方塊、結果與畫面不符）先呼叫 mc_verify_reading 判斷是不是協定漂移，不要當成「那裡是空的」繼續推論。',
       ].join('\n'),
     },
   );

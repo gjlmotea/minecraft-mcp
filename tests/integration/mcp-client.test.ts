@@ -342,3 +342,27 @@ describe('課堂防護接線', () => {
     expect(result.isError).toBeFalsy();
   });
 });
+
+/**
+ * 協定漂移的偵測是「按需呼叫」而不是例行檢查——設計上刻意如此，因為例行
+ * 檢查會養成看到綠燈就放心的習慣。代價是它完全依賴 AI 在行為可疑時**自己
+ * 找到** mc_verify_reading，而唯一的線索就在 server instructions 裡。
+ *
+ * 所以那行字是這個設計的單點依賴：有人整理 instructions 順手刪掉，整套偵測
+ * 就靜靜失效，而且沒有任何測試會紅。這條測試就是守它的。
+ */
+describe('協定漂移的可發現性', () => {
+  it('server instructions 要指向 mc_verify_reading，否則 AI 出事時找不到它', async () => {
+    const fake = createFakeConnection();
+    const client = await connect(fake);
+    const instructions = client.getInstructions() ?? '';
+    expect(instructions).toContain('mc_verify_reading');
+  });
+
+  it('instructions 要明講「不要當成那裡是空的」，這是最容易犯的誤判', async () => {
+    const fake = createFakeConnection();
+    const client = await connect(fake);
+    const instructions = client.getInstructions() ?? '';
+    expect(instructions).toContain('空的');
+  });
+});
