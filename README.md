@@ -5,7 +5,7 @@
 透過 Minecraft Education 官方文件化的 `/wsserver` 連線命令（`/connect` 是 alias）操作，不注入行程、不改遊戲檔案、不用畫面辨識。連線命令是官方介面；後續 WebSocket 訊息協定並沒有公開穩定性保證，因此遊戲改版後仍需重新驗證。
 
 - 41 個工具、2 份 resource
-- 187 項單元與整合測試、1 支不需開遊戲的 stdio／程序生命週期 smoke、1 支真機 live 驗證
+- 204 項單元與整合測試、1 支不需開遊戲的 stdio／程序生命週期 smoke、1 支真機 live 驗證
 - 不需要任何帳號、token 或祕密；MCP runtime 只綁 loopback，不寫遊戲檔或 artifact
 
 ---
@@ -322,6 +322,26 @@ BlockHand 的管線是：
 
 所有會被插進指令列的方塊 ID、選擇器、狀態字串都先過白名單正規表達式，防止用空白拼出額外參數。
 
+**課堂防護（預設開啟）**
+
+上面第 3 點把決定權交給 Host，那在單人開發情境成立，但這個專案的使用現場是**教室**：
+
+- Host 可能被設成自動核准——老師為了上課順暢很容易這樣做。
+- 學生只要能對那個 AI 說話，就等於能下指令。**他不必破解橋接，只要說服模型。**
+- 誤用甚至不需要 raw 指令：`mc_player_action` 本來就接受 `@a` 且 `kill` 是選項之一。**所以只擋 raw 指令是演戲，兩條路都要擋。**
+
+規則做成一句話能教給老師的形狀：**會作用在「人」身上的動作，必須指名道姓。**
+
+| 路徑 | 行為 |
+|---|---|
+| raw 指令 | 直接拒絕 `kill`／`kick`／`op`／`deop`／`clear`／`ability` |
+| `mc_player_action` | `kill`／`clear`／`ability` 拒絕 `@` 開頭的選擇器，必須給玩家名稱 |
+| 建造與世界設定 | 完全不受影響（`fill`、`setblock`、`clone`、`structure`、`time`……） |
+
+「殺光全班」因此從一句話變成必須逐一指名，而合法的課堂管理（清掉某個學生的背包）完全不受影響。
+
+要關閉設 `MINECRAFT_EDU_CLASSROOM_GUARD=0`——錯誤訊息本身就會告訴你這件事，不會讓人以為工具壞了。
+
 **商標**
 
 依 [Minecraft Usage Guidelines](https://www.minecraft.net/en-us/usage-guidelines)，第三方工具不得看起來像官方產品。產品名 **BlockHand** 刻意不含 Minecraft 商標；`minecraft-edu` 只是這個私人工作區內的描述性資料夾名。若日後要對外發布，套件名與任何公開露出都必須重新檢視。
@@ -341,6 +361,7 @@ BlockHand 的管線是：
 | `MINECRAFT_EDU_KEEPALIVE_INTERVAL_MS` | `30000` | 閒置時送出保活探測（`time query daytime`）的間隔。調小可更快發現真的斷線，代價是更常打擾遊戲 |
 | `MINECRAFT_EDU_EVENT_BUFFER` | `500` | 事件環形緩衝筆數 |
 | `MINECRAFT_EDU_MAX_BUILD_BLOCKS` | `200000` | 單次建造方塊數上限，超過即拒絕 |
+| `MINECRAFT_EDU_CLASSROOM_GUARD` | `1`（開啟） | 課堂防護：作用在玩家身上的動作必須指名道姓；raw 指令拒絕 kill／kick／op／deop／clear／ability。設 `0` 關閉 |
 | `MINECRAFT_EDU_STEP_DELAY_MS` | `100` | Agent 程式每步預設間隔 |
 | `MINECRAFT_EDU_DEBUG_FRAMES` | 未設 | 設成 `1` 會把遊戲回的每個原始封包印到 stderr，診斷協定行為用 |
 

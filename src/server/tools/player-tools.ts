@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import type { BlockHandService } from '../../application/blockhand-service.js';
 import { chatCommands, playerCommands } from '../../domain/commands.js';
+import { assertClassroomAllowsTarget } from '../../domain/classroom-guard.js';
 import {
   blockNameSchema,
   commandOutcomeSchema,
@@ -130,6 +131,9 @@ export function registerPlayerTools(server: McpServer, service: BlockHandService
     },
     async ({ action, target, item, amount, unit, ability, enabled }) =>
       guard(async () => {
+        // 專用工具跟 raw 指令是同一個攻擊面：mc_player_action 本來就接受 @a，
+        // 只擋 raw 指令等於沒擋。作用在人身上的動作一律要求指名道姓。
+        assertClassroomAllowsTarget(action, target, service.classroomGuard);
         const commandLine =
           action === 'kill'
             ? playerCommands.kill(target)
