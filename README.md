@@ -4,8 +4,8 @@
 
 透過 Minecraft Education 官方文件化的 `/wsserver` 連線命令（`/connect` 是 alias）操作，不注入行程、不改遊戲檔案、不用畫面辨識。連線命令是官方介面；後續 WebSocket 訊息協定並沒有公開穩定性保證，因此遊戲改版後仍需重新驗證。
 
-- 40 個工具、2 份 resource
-- 161 項單元與整合測試、1 支不需開遊戲的 stdio／程序生命週期 smoke、1 支真機 live 驗證
+- 41 個工具、2 份 resource
+- 187 項單元與整合測試、1 支不需開遊戲的 stdio／程序生命週期 smoke、1 支真機 live 驗證
 - 不需要任何帳號、token 或祕密；MCP runtime 只綁 loopback，不寫遊戲檔或 artifact
 
 ---
@@ -56,7 +56,7 @@ corepack pnpm run doctor          # 加 --client=claude 等可診斷其他家
 安裝器不是只把指令寫進設定檔，它會：
 
 - **自動填入這台機器的絕對 Node 路徑**，不依賴桌面程式能否讀到 nvm、Homebrew 或 shell PATH。
-- **先跑一次真正的 MCP initialize**（用即將寫入的 command／args／env），確認 40 個工具都在，才動任何持久設定。舊 dist、錯誤 launcher、不可執行的 Node 都會在寫入之前就失敗。
+- **先跑一次真正的 MCP initialize**（用即將寫入的 command／args／env），確認 41 個工具都在，才動任何持久設定。舊 dist、錯誤 launcher、不可執行的 Node 都會在寫入之前就失敗。
 - **已正確登記時什麼都不做**，重跑安全。
 - **同名但不相容時停下並列出差異**，不自動 remove/add，避免覆寫別人的 timeout、tool policy 或另一個 clone 的設定。
 - **只透過各家官方 `mcp add`／`mcp remove` 子指令寫入**，不手改設定檔——那會繞過各家自己的 schema 驗證與 scope 解析。
@@ -182,7 +182,7 @@ corepack pnpm run doctor
 corepack pnpm blockhand doctor --json
 ```
 
-doctor 不修改持久設定、不啟動 Minecraft；它會短暫建立隔離的 loopback socket，驗證 launcher、40 tools、2 resources、stdio EOF、監聽埠釋放，並以 Codex **實際登記的 command／args／env** 再完成一次 initialize，避免設定指向失效 Node 卻假綠。
+doctor 不修改持久設定、不啟動 Minecraft；它會短暫建立隔離的 loopback socket，驗證 launcher、41 tools、2 resources、stdio EOF、監聽埠釋放，並以 Codex **實際登記的 command／args／env** 再完成一次 initialize，避免設定指向失效 Node 卻假綠。
 
 遊戲開著、世界已載入、作弊已開之後：
 
@@ -234,9 +234,9 @@ cd gjlmotea/vibe/mcp/minecraft-edu && corepack pnpm run verify
 
 Agent 方向是**相對它自己的面向**，不是世界方位。
 
-### 世界（11）
+### 世界（12）
 
-`mc_set_block`、`mc_fill`、`mc_clone`、`mc_test_block`、`mc_read_block`、`mc_compare_regions`、`mc_query_target`、`mc_summon`、`mc_world_settings`（時間／天氣／遊戲規則／難度）、`mc_structure`（存讀結構）、`mc_ticking_area`。
+`mc_set_block`、`mc_fill`、`mc_clone`、`mc_test_block`、`mc_read_block`、`mc_compare_regions`、`mc_analyze_symmetry`、`mc_query_target`、`mc_summon`、`mc_world_settings`（時間／天氣／遊戲規則／難度）、`mc_structure`（存讀結構）、`mc_ticking_area`。
 
 `mc_query_target` 會把 `querytarget` 回傳的 JSON 字串解析好，這是取得玩家或 Agent 座標的正規做法——建造前先問它。
 
@@ -247,6 +247,21 @@ Agent 方向是**相對它自己的面向**，不是世界方位。
 - `mc_compare_regions` 用一條 `testforblocks` 比對整片區域。逐格比對在幾百格以上就會撞到 host 逾時，這個不會。`masked` 模式忽略來源的空氣，適合檢查「該有的東西在不在」而不管周圍多了什麼——**批改學生作品**就是這個形狀。
 
 要逐格讀整片區域請走行為包與 Script API；本專案刻意不走那條路，因為那會讓學校電腦多一道安裝步驟。
+
+### 對稱性分析——批改作品
+
+`mc_analyze_symmetry` 檢查一塊區域是否鏡像對稱，**不對稱時會指出哪幾塊不對稱**，不是只丟一個「否」。
+
+原理：`testforblocks` 只做平移比對不會鏡像，所以先用 `structure save` 存下區域，再用 `structure load` 的 mirror 參數把它鏡像放到暫存區，然後兩區比對。整體通過就直接滿分；不通過才細分成 n³ 格逐格比，分數是相符格子的比例。
+
+**這個工具會暫時寫入世界**，流程如下，任何一步失敗都不會留下爛攤子：
+
+1. 存下分析區——失敗就中止（通常是區塊未載入）。
+2. **先備份暫存區**——備份失敗就中止，且**絕不放置鏡像副本**，世界毫髮無傷。
+3. 放鏡像副本、比對。
+4. 不論成敗都還原暫存區並刪掉暫存結構；還原結果如實回報在 `scratchRestored`，失敗不粉飾。
+
+暫存區不可與分析區重疊，否則鏡像副本會蓋掉原始建築——這個檢查在送出任何指令之前就做。
 
 ### 玩家與回饋（7）
 

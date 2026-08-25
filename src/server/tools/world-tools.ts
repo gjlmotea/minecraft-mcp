@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { BlockHandService } from '../../application/blockhand-service.js';
+import { analyzeSymmetry } from '../../application/symmetry-service.js';
 import { parseQueryTargetDetails } from '../../application/blockhand-service.js';
 import { SENTINEL_BLOCK, readBlockFromOutcome } from '../../domain/block-report.js';
 import { worldCommands } from '../../domain/commands.js';
@@ -142,6 +143,85 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
         return ok(
           { ...outcomeToPayload(outcome), matches: outcome.ok },
           outcome.ok ? `符合：該座標是 ${block}。` : `不符合：${outcome.statusMessage ?? '該座標不是指定方塊'}`,
+        );
+      }),
+  );
+
+  server.registerTool(
+    'mc_analyze_symmetry',
+    {
+      title: '分析建築的鏡像對稱程度',
+      description:
+        '檢查一塊區域是否左右（或前後）對稱，並在不對稱時指出**哪幾塊**不對稱。' +
+        '批改學生作品用這個：分數是對稱格子的比例，不是憑感覺。' +
+        '原理：testforblocks 只會平移比對不會鏡像，所以先用 structure save／load ' +
+        '的 mirror 參數做出鏡像副本，再跟原區比對。' +
+        '⚠️ 這會**暫時寫入** scratch 指定的暫存區：流程一定先備份該區內容，比對完立刻還原；' +
+        '備份失敗就中止且不動世界。scratch 不可與分析區重疊，否則鏡像副本會蓋掉原始建築。' +
+        '區域受 structure 指令上限限制（64×384×64）。',
+      inputSchema: z
+        .object({
+          from: coordinateSchema().describe('分析區的一角'),
+          to: coordinateSchema().describe('分析區的對角'),
+          mirror: z
+            .enum(['x', 'z', 'xz'])
+            .default('x')
+            .describe('鏡射軸；x 檢查左右對稱、z 檢查前後對稱、xz 兩軸都要'),
+          scratch: coordinateSchema().describe('暫存區最小角；會被覆蓋後還原，不可與分析區重疊'),
+          cellsPerAxis: z
+            .number()
+            .int()
+            .min(1)
+            .max(4)
+            .default(2)
+            .describe('整體不對稱時的細分粒度；每軸 n 段共 n³ 格，每格一條指令'),
+        })
+        .strict(),
+      outputSchema: z
+        .object({
+          symmetric: z.boolean(),
+          score: z.number().describe('0–100，對稱格子的比例'),
+          matchedCells: z.number(),
+          totalCells: z.number(),
+          mirror: z.string(),
+          commandsIssued: z.number(),
+          scratchRestored: z.boolean().describe('false 代表暫存區沒還原成功，世界被留下改動'),
+          asymmetricCells: z.array(
+            z.object({
+              min: z.object({ x: z.number(), y: z.number(), z: z.number() }),
+              max: z.object({ x: z.number(), y: z.number(), z: z.number() }),
+            }),
+          ),
+        })
+        .strict(),
+      annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true, openWorldHint: false },
+    },
+    async ({ from, to, mirror, scratch, cellsPerAxis }) =>
+      guard(async () => {
+        const report = await analyzeSymmetry(service, {
+          from: toCoordinate(from),
+          to: toCoordinate(to),
+          mirror,
+          scratch: toCoordinate(scratch),
+          cellsPerAxis,
+        });
+        const warning = report.scratchRestored ? '' : '⚠️ 暫存區還原失敗，世界被留下改動。';
+        const summary = report.symmetric
+          ? `完全對稱（${report.mirror} 軸）。${warning}`
+          : `對稱度 ${String(report.score)}%（${String(report.matchedCells)}/${String(report.totalCells)} 格相符）；` +
+            `不對稱的區塊有 ${String(report.asymmetricCells.length)} 塊。${warning}`;
+        return ok(
+          {
+            symmetric: report.symmetric,
+            score: report.score,
+            matchedCells: report.matchedCells,
+            totalCells: report.totalCells,
+            mirror: report.mirror,
+            commandsIssued: report.commandsIssued,
+            scratchRestored: report.scratchRestored,
+            asymmetricCells: report.asymmetricCells.map((cell) => ({ min: cell.min, max: cell.max })),
+          },
+          summary,
         );
       }),
   );

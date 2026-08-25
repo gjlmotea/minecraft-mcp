@@ -36,6 +36,10 @@ export type BlockHandlingMode = (typeof BLOCK_HANDLING_MODES)[number];
 export const FILL_MODES = ['replace', 'destroy', 'keep', 'hollow', 'outline'] as const;
 export type FillMode = (typeof FILL_MODES)[number];
 
+/** structure load 的鏡像軸；xz 等於同時對兩軸鏡射。 */
+export const STRUCTURE_MIRRORS = ['none', 'x', 'z', 'xz'] as const;
+export type StructureMirror = (typeof STRUCTURE_MIRRORS)[number];
+
 /** 單一指令送進遊戲後的結果。遊戲永遠回一包 JSON，這裡保持原樣不猜測。 */
 export interface CommandOutcome {
   readonly ok: boolean;

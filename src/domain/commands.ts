@@ -13,6 +13,7 @@ import type {
   BlockHandlingMode,
   Coordinate,
   FillMode,
+  StructureMirror,
   TurnDirection,
 } from './contracts.js';
 import { MinecraftBridgeError } from './contracts.js';
@@ -285,8 +286,22 @@ export const worldCommands = {
     ]);
   },
 
-  loadStructure(name: string, to: Coordinate): string {
-    return join(['structure load', assertIdentifier(name, '結構名稱'), formatCoordinate(to)]);
+  /**
+   * mirror 必須跟在 rotation 後面，這是遊戲的位置參數順序；只給 mirror 會被
+   * 當成 rotation 解析而失敗。所以需要鏡像時一律補上 0_degrees。
+   */
+  loadStructure(name: string, to: Coordinate, mirror: StructureMirror = 'none'): string {
+    return join([
+      'structure load',
+      assertIdentifier(name, '結構名稱'),
+      formatCoordinate(to),
+      mirror === 'none' ? null : '0_degrees',
+      mirror === 'none' ? null : mirror,
+    ]);
+  },
+
+  deleteStructure(name: string): string {
+    return join(['structure delete', assertIdentifier(name, '結構名稱')]);
   },
 
   addTickingArea(from: Coordinate, to: Coordinate, name: string | null): string {

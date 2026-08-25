@@ -206,7 +206,7 @@ async function verifyDirectDistCompatibility() {
   try {
     await directClient.connect(transport);
     const { tools } = await directClient.listTools();
-    assert.equal(tools.length, 40);
+    assert.equal(tools.length, 41);
     const status = await directClient.callTool({ name: 'mc_status', arguments: {} });
     assert.equal(status.structuredContent.connectCommand, `/connect 127.0.0.1:${directPort}`);
   } finally {
@@ -239,7 +239,7 @@ try {
   const { tools } = await client.listTools();
   const names = tools.map((tool) => tool.name).sort();
   toolCount = names.length;
-  assert.equal(names.length, 40, `預期 40 個工具，實際 ${names.length}`);
+  assert.equal(names.length, 41, `預期 41 個工具，實際 ${names.length}`);
   for (const required of [
     'mc_status',
     'mc_agent_program',

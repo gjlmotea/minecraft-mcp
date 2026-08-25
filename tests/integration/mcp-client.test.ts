@@ -66,6 +66,7 @@ describe('MCP 工具面', () => {
       'mc_agent_sense',
       'mc_agent_teleport',
       'mc_agent_turn',
+      'mc_analyze_symmetry',
       'mc_await_connection',
       'mc_blueprint_preview',
       'mc_build_blueprint',
@@ -97,7 +98,7 @@ describe('MCP 工具面', () => {
       'mc_ticking_area',
       'mc_world_settings',
     ]);
-    expect(names).toHaveLength(40);
+    expect(names).toHaveLength(41);
   });
 
   it('mc_status 回報連線資訊', async () => {
