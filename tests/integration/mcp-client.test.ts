@@ -366,3 +366,71 @@ describe('協定漂移的可發現性', () => {
     expect(instructions).toContain('空的');
   });
 });
+
+/**
+ * mc_structure 的 saveMode 語意：memory 是「這次協作的暫存」，disk 是「使用者
+ * 明確說要保留」。預設必須是 memory——使用者只說「存一下」卻在他的世界資料夾
+ * 留下檔案，是那種當下沒人察覺、事後才變成問題的事。
+ */
+describe('mc_structure 儲存語意', () => {
+  let fake: FakeConnection;
+  let client: Client;
+
+  beforeEach(async () => {
+    fake = createFakeConnection();
+    client = await connect(fake);
+  });
+
+  it('沒指定 saveMode 時走 memory，不在硬碟留檔', async () => {
+    const result = await client.callTool({
+      name: 'mc_structure',
+      arguments: { action: 'save', name: 'castle_v1', from: { x: 0, y: 64, z: 0 }, to: { x: 4, y: 68, z: 4 } },
+    });
+    expect(structured(result)['commandLine']).toContain('memory');
+  });
+
+  it('寫入硬碟時一定要在回覆裡講出來，不能靜悄悄', async () => {
+    const result = await client.callTool({
+      name: 'mc_structure',
+      arguments: {
+        action: 'save',
+        name: 'castle_final',
+        from: { x: 0, y: 64, z: 0 },
+        to: { x: 4, y: 68, z: 4 },
+        saveMode: 'disk',
+      },
+    });
+    const text = (result.content as { type: string; text: string }[])[0]?.text ?? '';
+    expect(text).toContain('世界資料夾');
+  });
+
+  it('存過的名字會記進 mc_status——遊戲沒有列出結構的指令，這是唯一的辦法', async () => {
+    await client.callTool({
+      name: 'mc_structure',
+      arguments: { action: 'save', name: 'castle_v1', from: { x: 0, y: 64, z: 0 }, to: { x: 4, y: 68, z: 4 } },
+    });
+    await client.callTool({
+      name: 'mc_structure',
+      arguments: {
+        action: 'save',
+        name: 'castle_v2',
+        from: { x: 0, y: 64, z: 0 },
+        to: { x: 4, y: 68, z: 4 },
+        saveMode: 'disk',
+      },
+    });
+    const status = await client.callTool({ name: 'mc_status', arguments: {} });
+    const saved = structured(status)['savedStructures'] as { name: string; saveMode: string }[];
+    expect(saved.map((entry) => entry.name)).toEqual(['castle_v1', 'castle_v2']);
+    expect(saved[1]?.saveMode).toBe('disk');
+  });
+
+  it('load 不會被記成存過的版本', async () => {
+    await client.callTool({
+      name: 'mc_structure',
+      arguments: { action: 'load', name: 'castle_v1', destination: { x: 20, y: 64, z: 20 } },
+    });
+    const status = await client.callTool({ name: 'mc_status', arguments: {} });
+    expect(structured(status)['savedStructures']).toEqual([]);
+  });
+});

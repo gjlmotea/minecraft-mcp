@@ -23,10 +23,14 @@ export function registerSessionTools(server: McpServer, service: BlockHandServic
     async () =>
       guard(async () => {
         const status = service.status();
+        const saved = service.savedStructures();
         return ok(
-          { ...status },
+          { ...status, savedStructures: saved },
           status.connected
-            ? `已連線（第 ${String(status.connectionCount)} 次），累計送出 ${String(status.commandsIssued)} 條指令。`
+            ? `已連線（第 ${String(status.connectionCount)} 次），累計送出 ${String(status.commandsIssued)} 條指令。` +
+              (saved.length === 0
+                ? ''
+                : `本次存過的結構：${saved.map((entry) => `${entry.name}（${entry.saveMode}）`).join('、')}。`)
             : `尚未連線。請在 Minecraft Education 聊天列輸入：${status.connectCommand}（世界必須開啟作弊／Cheats）。`,
         );
       }),

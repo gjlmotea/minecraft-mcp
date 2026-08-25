@@ -461,16 +461,27 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
     {
       title: '儲存或載入結構',
       description:
-        '把一塊區域存成具名結構，或把已存的結構放回世界。這是把 AI 蓋好的東西保存、量產、帶到別的世界的官方途徑。',
+        '把一塊區域存成具名結構，或把已存的結構放回世界。這是把 AI 蓋好的東西保存、量產、帶到別的世界的官方途徑。' +
+        '\n\n**saveMode 要照使用者的意圖選，不要一律用同一個：**' +
+        '\n- `memory`（預設）＝這次連線內的暫存。AI 反覆修改同一棟建築時用這個：想留退路就存一版，' +
+        '改壞了 load 回來。關掉遊戲就消失，不會在硬碟累積檔案。' +
+        '\n- `disk` ＝**使用者明確表示要保留**時才用（「幫我記住這棟」「存起來下次還要用」）。' +
+        '它會寫成檔案存進遊戲的世界資料夾，關掉遊戲也還在——但那是真的在使用者硬碟上留東西，' +
+        '不要在他沒說要保留時擅自寫入。' +
+        '\n\n版本管理就是**取名字**：`castle_v1`、`castle_v2`。同名會直接覆蓋，改版本前先換名字。' +
+        '遊戲沒有「列出已存結構」的指令，所以存過什麼只能靠名字記——本次連線存過的名單可以問 mc_status。',
       inputSchema: z
         .object({
           action: z.enum(['save', 'load']),
-          name: z.string().trim().min(1).max(64),
+          name: z.string().trim().min(1).max(64).describe('版本就靠這個區分；同名會覆蓋'),
           from: coordinateSchema().optional().describe('save 需要'),
           to: coordinateSchema().optional().describe('save 需要'),
           destination: coordinateSchema().optional().describe('load 需要'),
           includeEntities: z.boolean().default(false),
-          saveMode: z.enum(['memory', 'disk']).default('disk'),
+          saveMode: z
+            .enum(['memory', 'disk'])
+            .default('memory')
+            .describe('memory=暫存（預設）；disk=寫進硬碟，只在使用者明確說要保留時用'),
         })
         .strict(),
       outputSchema: commandOutcomeSchema(),
@@ -495,7 +506,17 @@ export function registerWorldTools(server: McpServer, service: BlockHandService)
           commandLine = worldCommands.loadStructure(name, toCoordinate(destination));
         }
         const outcome = await service.run(commandLine);
-        return ok(outcomeToPayload(outcome), summarizeOutcome(outcome));
+        if (action === 'save' && outcome.ok) service.rememberStructure(name, saveMode);
+
+        // 寫入硬碟一定要講出來。使用者只說「存一下」卻在他的世界資料夾留下
+        // 檔案，是那種當下沒人察覺、事後才變成問題的事。
+        const note =
+          action === 'save'
+            ? saveMode === 'disk'
+              ? '（已寫入遊戲世界資料夾，關掉遊戲仍在）'
+              : '（暫存於記憶體，關掉遊戲就消失）'
+            : '';
+        return ok(outcomeToPayload(outcome), `${summarizeOutcome(outcome)}${note}`);
       }),
   );
 

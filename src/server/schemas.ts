@@ -108,6 +108,9 @@ export const connectionStatusSchema = () =>
       bufferedEvents: z.number(),
       commandsIssued: z.number(),
       encrypted: z.boolean(),
+      savedStructures: z
+        .array(z.object({ name: z.string(), saveMode: z.string() }).strict())
+        .describe('本次連線存過的結構；遊戲沒有列出結構的指令，所以只能由橋接自己記'),
     })
     .strict();
 

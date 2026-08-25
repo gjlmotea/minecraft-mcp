@@ -138,11 +138,26 @@ export function createBlockHandService(
   connection: MinecraftConnection,
   options: BlockHandServiceOptions,
 ) {
+  const savedStructures = new Map<string, 'memory' | 'disk'>();
+
   return {
     version: options.version,
 
+    /**
+     * 本次連線存過的結構。遊戲沒有「列出已存結構」的指令，所以 AI 反覆修改
+     * 同一棟建築時，唯一能知道「我剛才存過哪些版本」的辦法就是自己記。
+     * 只涵蓋本行程，重啟就沒了——disk 模式的檔案仍在，但名字要靠使用者記。
+     */
+    rememberStructure(name: string, mode: 'memory' | 'disk'): void {
+      savedStructures.set(name, mode);
+    },
+
     status(): ConnectionStatus {
       return connection.status();
+    },
+
+    savedStructures(): readonly { readonly name: string; readonly saveMode: string }[] {
+      return [...savedStructures].map(([name, saveMode]) => ({ name, saveMode }));
     },
 
     async awaitConnection(timeoutMs: number): Promise<ConnectionStatus> {
