@@ -18,9 +18,9 @@ export function registerPlayerTools(server: McpServer, service: BlockHandService
       title: '傳送玩家或實體',
       description: '把選擇器指定的對象傳送到座標。target 預設 @s 是執行指令的玩家。',
       inputSchema: z
-        .object({ target: selectorSchema.default('@s'), destination: coordinateSchema })
+        .object({ target: selectorSchema().default('@s'), destination: coordinateSchema() })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     },
     async ({ target, destination }) =>
@@ -39,13 +39,13 @@ export function registerPlayerTools(server: McpServer, service: BlockHandService
       description: '給對象指定數量的物品。要讓 Agent 有東西可放，先 give 給玩家再交給 Agent。',
       inputSchema: z
         .object({
-          target: selectorSchema.default('@s'),
-          item: blockNameSchema,
+          target: selectorSchema().default('@s'),
+          item: blockNameSchema(),
           amount: z.number().int().min(1).max(64).default(1),
           data: z.number().int().min(0).max(32767).nullable().default(null),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ target, item, amount, data }) =>
@@ -63,10 +63,10 @@ export function registerPlayerTools(server: McpServer, service: BlockHandService
       inputSchema: z
         .object({
           mode: z.enum(['survival', 'creative', 'adventure', 'spectator']),
-          target: selectorSchema.default('@s'),
+          target: selectorSchema().default('@s'),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     },
     async ({ mode, target }) =>
@@ -84,14 +84,14 @@ export function registerPlayerTools(server: McpServer, service: BlockHandService
       inputSchema: z
         .object({
           action: z.enum(['apply', 'clear']).default('apply'),
-          target: selectorSchema.default('@s'),
-          effect: blockNameSchema.optional().describe('apply 需要，例如 speed 或 night_vision'),
+          target: selectorSchema().default('@s'),
+          effect: blockNameSchema().optional().describe('apply 需要，例如 speed 或 night_vision'),
           seconds: z.number().int().min(0).max(1_000_000).default(30),
           amplifier: z.number().int().min(0).max(255).default(0),
           hideParticles: z.boolean().default(false),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ action, target, effect, seconds, amplifier, hideParticles }) =>
@@ -117,15 +117,15 @@ export function registerPlayerTools(server: McpServer, service: BlockHandService
       inputSchema: z
         .object({
           action: z.enum(['kill', 'clear', 'xp', 'ability']),
-          target: selectorSchema.default('@s'),
-          item: blockNameSchema.nullable().default(null).describe('clear 可選'),
+          target: selectorSchema().default('@s'),
+          item: blockNameSchema().nullable().default(null).describe('clear 可選'),
           amount: z.number().int().min(-100_000).max(100_000).default(1).describe('xp 需要'),
           unit: z.enum(['levels', 'points']).default('points'),
           ability: z.enum(['worldbuilder', 'mayfly', 'mute']).optional(),
           enabled: z.boolean().default(true),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
     },
     async ({ action, target, item, amount, unit, ability, enabled }) =>
@@ -160,10 +160,10 @@ export function registerPlayerTools(server: McpServer, service: BlockHandService
         .object({
           channel: z.enum(['say', 'tell', 'title', 'subtitle', 'actionbar']).default('say'),
           message: z.string().trim().min(1).max(512),
-          target: selectorSchema.default('@a'),
+          target: selectorSchema().default('@a'),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ channel, message, target }) =>
@@ -187,12 +187,12 @@ export function registerPlayerTools(server: McpServer, service: BlockHandService
       inputSchema: z
         .object({
           kind: z.enum(['sound', 'particle']),
-          id: blockNameSchema.describe('音效或粒子 ID，例如 random.levelup 或 minecraft:heart_particle'),
-          target: selectorSchema.default('@a').describe('kind="sound" 時的聽眾'),
-          position: coordinateSchema.nullable().default(null),
+          id: blockNameSchema().describe('音效或粒子 ID，例如 random.levelup 或 minecraft:heart_particle'),
+          target: selectorSchema().default('@a').describe('kind="sound" 時的聽眾'),
+          position: coordinateSchema().nullable().default(null),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema,
+      outputSchema: commandOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ kind, id, target, position }) =>

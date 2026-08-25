@@ -17,7 +17,7 @@ export function registerSessionTools(server: McpServer, service: BlockHandServic
       description:
         '回報 WebSocket 橋接是否在監聽、Minecraft 是否已連入、遊戲內應輸入的 /connect 指令、已訂閱事件與累計指令數。任何工具失敗時先查這個。無副作用。',
       inputSchema: z.object({}).strict(),
-      outputSchema: connectionStatusSchema,
+      outputSchema: connectionStatusSchema(),
       annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     },
     async () =>
@@ -41,7 +41,7 @@ export function registerSessionTools(server: McpServer, service: BlockHandServic
       inputSchema: z
         .object({ timeoutSeconds: z.number().int().min(1).max(120).default(30) })
         .strict(),
-      outputSchema: connectionStatusSchema,
+      outputSchema: connectionStatusSchema(),
       annotations: { readOnlyHint: true, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ timeoutSeconds }) =>
@@ -67,7 +67,7 @@ export function registerSessionTools(server: McpServer, service: BlockHandServic
           command: z.string().min(1).max(1024).describe('例如 "time set day" 或 "/give @s diamond 1"'),
         })
         .strict(),
-      outputSchema: commandOutcomeSchema.extend({ risk: z.string() }).strict(),
+      outputSchema: commandOutcomeSchema().extend({ risk: z.string() }).strict(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
     },
     async ({ command }) =>
@@ -94,7 +94,7 @@ export function registerSessionTools(server: McpServer, service: BlockHandServic
           delayMs: z.number().int().min(0).max(5000).default(0),
         })
         .strict(),
-      outputSchema: batchOutcomeSchema,
+      outputSchema: batchOutcomeSchema(),
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
     },
     async ({ commands, stopOnError, delayMs }) =>

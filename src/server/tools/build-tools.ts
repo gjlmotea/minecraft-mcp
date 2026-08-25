@@ -24,12 +24,12 @@ export function registerBuildTools(server: McpServer, build: BuildService): void
       description: `只計算不動工：回報這個形狀會用掉幾個方塊、邊界盒在哪、會拆成幾條 fill 指令。${BUILD_NOTE}`,
       inputSchema: z
         .object({
-          shape: shapeSchema,
-          block: blockNameSchema,
-          blockStates: blockStatesSchema.nullable().default(null),
+          shape: shapeSchema(),
+          block: blockNameSchema(),
+          blockStates: blockStatesSchema().nullable().default(null),
         })
         .strict(),
-      outputSchema: buildPlanSchema,
+      outputSchema: buildPlanSchema(),
       annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     },
     async ({ shape, block, blockStates }) =>
@@ -51,12 +51,12 @@ export function registerBuildTools(server: McpServer, build: BuildService): void
         `方塊座標會自動合併成最少的 fill 指令，所以蓋一顆半徑 20 的球只要幾百條指令而不是三萬條。${BUILD_NOTE}`,
       inputSchema: z
         .object({
-          shape: shapeSchema,
-          block: blockNameSchema,
-          blockStates: blockStatesSchema.nullable().default(null),
+          shape: shapeSchema(),
+          block: blockNameSchema(),
+          blockStates: blockStatesSchema().nullable().default(null),
         })
         .strict(),
-      outputSchema: batchOutcomeSchema.extend({ plan: buildPlanSchema }).strict(),
+      outputSchema: batchOutcomeSchema().extend({ plan: buildPlanSchema() }).strict(),
       annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true, openWorldHint: false },
     },
     async ({ shape, block, blockStates }) =>
@@ -74,9 +74,9 @@ export function registerBuildTools(server: McpServer, build: BuildService): void
 
   const blueprintEntrySchema = z
     .object({
-      position: vec3Schema,
-      block: blockNameSchema,
-      blockStates: blockStatesSchema.optional(),
+      position: vec3Schema(),
+      block: blockNameSchema(),
+      blockStates: blockStatesSchema().optional(),
     })
     .strict();
 
@@ -89,7 +89,7 @@ export function registerBuildTools(server: McpServer, build: BuildService): void
       inputSchema: z
         .object({ entries: z.array(blueprintEntrySchema).min(1).max(20_000) })
         .strict(),
-      outputSchema: buildPlanSchema,
+      outputSchema: buildPlanSchema(),
       annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     },
     async ({ entries }) =>
@@ -112,7 +112,7 @@ export function registerBuildTools(server: McpServer, build: BuildService): void
       inputSchema: z
         .object({ entries: z.array(blueprintEntrySchema).min(1).max(20_000) })
         .strict(),
-      outputSchema: batchOutcomeSchema.extend({ plan: buildPlanSchema }).strict(),
+      outputSchema: batchOutcomeSchema().extend({ plan: buildPlanSchema() }).strict(),
       annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true, openWorldHint: false },
     },
     async ({ entries }) =>
