@@ -22,20 +22,120 @@ corepack pnpm run build
 
 Node 必須是專案 `.nvmrc` 指定的 **22.23.1**，pnpm 由 Corepack 固定為 **11.17.0**。Windows 與 Mac 都要在本機安裝依賴；不要把另一個作業系統的 `node_modules` 複製過來。Minecraft Education 目前在 Mac 的最低需求是 **macOS 14**。
 
-### 步驟二：在該機登記一次 Codex MCP
+### 步驟二：在該機登記一次 MCP
+
+支援 **Codex／Claude Code／Gemini CLI／Grok CLI**，Windows 與 macOS 皆同。
+
+#### 先取得兩個絕對路徑
+
+註冊時**必須用絕對路徑**，不能只寫 `node`。桌面版 AI 工具是由 Finder／檔案總管啟動的，讀不到你 shell 裡的 nvm、Homebrew 或 PATH；寫 `node` 在終端機測得過，換成桌面版就會啟動失敗，而且錯誤訊息通常只說「server 沒回應」，很難查。
+
+macOS：
+
+```bash
+node -p "process.execPath"   # Node 絕對路徑
+pwd                          # 專案絕對路徑（在 minecraft-edu 目錄下執行）
+```
+
+Windows（PowerShell）：
+
+```powershell
+node -p "process.execPath"
+(Get-Location).Path
+```
+
+下面用 `<NODE>` 代表 Node 絕對路徑、`<REPO>` 代表專案絕對路徑。伺服器進入點固定是 `<REPO>/dist/index.js`（Windows 寫成 `<REPO>\dist\index.js`）。路徑含空白時整段要加引號。
+
+#### Codex
+
+有專用安裝器，會自己填絕對路徑、比對既有設定、不覆寫陌生 entry：
 
 ```bash
 corepack pnpm run setup:codex
 corepack pnpm run doctor
 ```
 
-安裝器會把「這台機器的絕對 Node 路徑」與跨平台 launcher 登記到 `~/.codex/config.toml`，不依賴 Finder／桌面程式能否讀到 nvm、Homebrew 或 shell PATH。它只透過官方 `codex mcp` 指令操作：
+安裝器把「這台機器的絕對 Node 路徑」與跨平台 launcher 登記到 `~/.codex/config.toml`，只透過官方 `codex mcp` 指令操作：
 
 - 沒有同名 entry：新增。
 - 已是同一工作樹、且絕對 Node 路徑可執行的正確／相容設定：實際 initialize 通過後 no-op，保留既有 timeout 與 tool policy。
-- 同名但不相容：停止並顯示差異，不自動 remove/add，也不覆寫陌生設定。
+- 同名但不相容：停止並顯示差異，不自動 remove/add。
 
-**同一台機器**的 Codex 桌面版、CLI 與 IDE 共用這份設定；Windows 筆電、Mac 或另一台電腦仍要各自執行一次，因為 Node 與專案的絕對路徑不同。登記後請完全退出並重啟 Codex。
+手動等價指令：
+
+```bash
+codex mcp add minecraft-edu --env MINECRAFT_EDU_WS_PORT=19131 -- <NODE> <REPO>/dist/index.js
+```
+
+#### Claude Code
+
+```bash
+claude mcp add minecraft-edu -s user -e MINECRAFT_EDU_WS_PORT=19131 -- <NODE> <REPO>/dist/index.js
+```
+
+`-s user` 寫進 `~/.claude.json`，所有專案都能用。改成 `-s project` 會寫進專案根目錄的 `.mcp.json`，可以隨 repo 分享——**整班共用時用這個**，學生 clone 下來就有設定，只是各自的絕對路徑不同，仍要各自跑一次。
+
+#### Gemini CLI
+
+```bash
+gemini mcp add minecraft-edu <NODE> <REPO>/dist/index.js -s user -e MINECRAFT_EDU_WS_PORT=19131
+```
+
+注意 `gemini mcp add` 的**預設 scope 是 project**，要全域可用必須明寫 `-s user`（寫進 `~/.gemini/settings.json`）。另外它的 command 與 args 是直接接在名稱後面，不用 `--` 分隔。
+
+#### Grok CLI
+
+```bash
+grok mcp add minecraft-edu -s user -e MINECRAFT_EDU_WS_PORT=19131 -- <NODE> <REPO>/dist/index.js
+```
+
+寫進 `~/.grok/config.toml`。`--` 之後的參數才會傳給 server 而不是被 grok 自己吃掉。
+
+#### 手動編設定檔（安裝器失效時的後備）
+
+Claude Code 與 Gemini CLI 用 JSON：
+
+```json
+{
+  "mcpServers": {
+    "minecraft-edu": {
+      "command": "<NODE>",
+      "args": ["<REPO>/dist/index.js"],
+      "env": { "MINECRAFT_EDU_WS_PORT": "19131" }
+    }
+  }
+}
+```
+
+Codex 與 Grok CLI 用 TOML：
+
+```toml
+[mcp_servers.minecraft-edu]
+command = "<NODE>"
+args = ["<REPO>/dist/index.js"]
+env = { MINECRAFT_EDU_WS_PORT = "19131" }
+```
+
+#### Windows 補充
+
+- Node 絕對路徑通常是 `C:\Program Files\nodejs\node.exe`，用 nvm-windows 則像 `C:\Users\<你>\AppData\Roaming\nvm\v22.23.1\node.exe`。
+- JSON 設定檔裡的反斜線要跳脫：`"C:\\Program Files\\nodejs\\node.exe"`。TOML 可以改用單引號字面字串：`command = 'C:\Program Files\nodejs\node.exe'`。
+- Minecraft Education 若是 Microsoft Store 的 UWP 版，loopback 會被 Windows 應用程式隔離擋住，需要額外的 `CheckNetIsolation LoopbackExempt` 豁免（見第 8 節）。
+
+#### 登記後
+
+**完全退出並重啟該 AI 工具**——桌面版要真的結束程式，不是關掉視窗。然後確認：
+
+```bash
+codex mcp list
+claude mcp list
+gemini mcp list
+grok mcp list
+```
+
+或直接叫 AI 呼叫 `mc_status`，能回傳 `connectCommand` 就代表 server 起得來。
+
+**每台機器都要各自登記一次**：Windows 筆電、Mac、另一台電腦的 Node 與專案絕對路徑都不同，不能互相複製設定。同一台機器上，同一個工具的桌面版／CLI／IDE 共用同一份設定。
 
 ### 步驟三：在遊戲裡手動連進來
 
@@ -47,7 +147,7 @@ corepack pnpm run connect
 
 **方向很容易搞反：遊戲是連出來的一方，MCP server 是被連的一方。**
 
-1. 在目前 Codex task 呼叫 `mc_status`，複製它回傳的 `connectCommand`。
+1. 在目前的 AI 對話中呼叫 `mc_status`，複製它回傳的 `connectCommand`。
 2. 開 Minecraft Education，**進入一個世界**（停在主選單沒有用）。
 3. 世界必須開啟 **Cheats**，操作者需有 Admin／OP 權限。
 4. 在聊天列手動輸入，例如：
@@ -57,6 +157,10 @@ corepack pnpm run connect
 ```
 
 看到 `Connection established` 就完成了。之後對 AI 說「幫我在前面蓋一顆空心玻璃球」即可。
+
+**要重連時不必重打整串**：在聊天列按 `T` 開啟，再按 `↑` 叫回上一條指令，然後 Enter。
+
+> 早期版本有一個「閒置約 60 秒必斷線」的 bug：心跳只認 WebSocket pong frame，但 Bedrock／Education 的客戶端從不回 pong，導致健康的連線被自己的心跳終止。現已修正（改以任何進來的封包判定活性，並輔以應用層探測），閒置不應再造成斷線。若仍會斷，先確認你跑的是重新 build 過的 `dist/`。
 
 不要固定背 19131：桌面版、CLI、IDE 或多個 task 同時啟動時，後開的 MCP 可能取得不同空閒埠。永遠使用**目前要操作的那個 task**回報的指令。
 
@@ -245,13 +349,13 @@ src/
 ## 8. 已知限制
 
 - **世界必須開作弊**，否則遊戲會拒絕每一條指令。這是 Minecraft 的規則，不是 bug。
-- **macOS 狀態是程式層與安裝流程支援、待真機 live 驗證**：目前尚未在 macOS 14+ 從 Finder 啟動 Codex Desktop 並完成 Minecraft `/connect`、讀寫與斷線重連的全流程，因此不能宣稱 Mac 遊戲端已驗證。
+- **macOS 已完成真機 live 驗證（Claude Code 路徑）**：2026-08-25 在 macOS 上經 Claude Code 完成 `/connect`、大量讀寫（單一工作階段逾 45,000 方塊、含 `fill`／`setblock`／`testforblock`／`teleport`）與斷線重連全流程。**尚未**驗證的是「從 Finder 啟動 Codex Desktop」這條啟動路徑——GUI 啟動的 PATH 與環境變數繼承方式不同，仍需各自實測。
 - **Agent 是 Education Edition 專屬**，一般 Bedrock 版沒有這個功能。
 - **事件名稱與 `agent` 子指令 Mojang 沒有正式文件化**，來自公開觀察；遊戲改版可能改變行為。`mc_events_subscribe` 允許清單外的名稱，但會標記為未驗證。
 - **`agent setitem` 的參數順序未經證實**，目前沒有做成專用工具，需要時請走 `mc_run_command`。
 - **`@s` 在 WebSocket 指令下不一定能解析**：從橋接送進去的指令沒有實體身分，實測 `querytarget @s` 會完全沒有回應。`mc_query_target` 因此預設用 `@p`（最近的玩家），`live` 也會依序試 `@p` → `@a` → `@e[type=player]` 並回報每次結果。
 - **大型建造可能撞到 MCP Host 的請求逾時**：建造工具會逐條送出 fill 並等遊戲回應，實測半徑 6 的空心球（126 條）約需 13 秒，但遊戲繁忙時會更久。MCP client 預設逾時多為 60 秒，超過就會在 Host 端被砍斷（工具本身仍在跑）。先用 `mc_build_preview` 看 `fillBatches`，數量大時分批建造。
-- **每個 BlockHand 程序仍各自持有一個監聽埠**：STDIO client 關閉後，server 會同步關閉 Minecraft WebSocket 並釋放連接埠。Codex 桌面版同時載入多個任務，或桌面版／CLI／IDE 並行時，第一份會取得優先埠，其餘會自動取得空閒埠；請一律用目前任務的 `mc_status.connectCommand` 讓遊戲連到實際要操作的那一份。若需要固定埠，可替各 client 配不同的 `MINECRAFT_EDU_WS_PORT`，或把 `MINECRAFT_EDU_WS_PORT_FALLBACK` 設成 `0`。
+- **每個 BlockHand 程序仍各自持有一個監聽埠**：STDIO client 關閉後，server 會同步關閉 Minecraft WebSocket 並釋放連接埠。AI 工具的桌面版同時載入多個任務，或桌面版／CLI／IDE 並行時，第一份會取得優先埠，其餘會自動取得空閒埠；請一律用目前任務的 `mc_status.connectCommand` 讓遊戲連到實際要操作的那一份。若需要固定埠，可替各 client 配不同的 `MINECRAFT_EDU_WS_PORT`，或把 `MINECRAFT_EDU_WS_PORT_FALLBACK` 設成 `0`。
 - **握手後的第一條指令曾必定逾時，現已修正**：四次獨立真機執行都重現——遊戲在伺服器裝好解密器之前就送出一個加密訊框，串流錯位導致下一次請求的回應讀不出來。AES-CFB8 會自我同步，所以只影響第一條。adapter 現在會在握手完成後自動送一條唯讀 `time query daytime` 把那次損失吸收掉並丟棄結果，呼叫端的第一個動作即可正常。stderr 會記 `primed post-handshake stream`。
 - **事件只在真正發生時觸發**：`BlockPlaced` 只在玩家親手放方塊時發出，`/setblock` 與 `/fill` 都不算。要收到事件必須先訂閱、再讓事件真的發生。
 - **部分回應的 requestId 對不上請求**（觀察到會回全為零的 ID）。adapter 在「只剩一個待決請求」時會把回應歸給它，並在 stderr 記錄這是推斷來的；否則那些請求會一路靜默逾時，呼叫端只看到「沒反應」而不是真正的失敗原因。
