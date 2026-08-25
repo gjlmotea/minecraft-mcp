@@ -256,3 +256,13 @@ src/
 - **部分回應的 requestId 對不上請求**（觀察到會回全為零的 ID）。adapter 在「只剩一個待決請求」時會把回應歸給它，並在 stderr 記錄這是推斷來的；否則那些請求會一路靜默逾時，呼叫端只看到「沒反應」而不是真正的失敗原因。
 - 一次只維持一條遊戲連線；新連線會取代舊的。
 - 已完成真機驗證的環境：Minecraft Education **1.26.32.0（Win32 桌面版）**。若改用 Microsoft Store 的 UWP 版，loopback 會被 Windows 應用程式隔離擋住，需要額外的 `CheckNetIsolation LoopbackExempt` 豁免。macOS 14+ 的驗收矩陣見 [`agents/docs/macos-support.md`](agents/docs/macos-support.md)。
+
+---
+
+## 9. 授權
+
+本專案以 [MIT License](LICENSE) 釋出。你可以自由使用、修改、散布與再授權，包含商業用途，唯一條件是保留原始的版權聲明與授權條款。
+
+軟體按「現狀」提供，不附任何明示或默示的擔保。
+
+Minecraft、Minecraft Education 為 Mojang Studios 與 Microsoft 的商標；本專案與兩者無隸屬關係，也未獲其背書。
