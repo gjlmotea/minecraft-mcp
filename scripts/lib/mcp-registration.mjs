@@ -165,18 +165,3 @@ export function classifyRegistration(
   };
 }
 
-export function buildAddArguments(desired) {
-  const environmentArguments = Object.entries(desired.transport.env).flatMap(([key, value]) => [
-    '--env',
-    `${key}=${value}`,
-  ]);
-  return [
-    'mcp',
-    'add',
-    desired.name,
-    ...environmentArguments,
-    '--',
-    desired.transport.command,
-    ...desired.transport.args,
-  ];
-}

@@ -2,9 +2,9 @@
 
 import { spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { arch, platform } from 'node:os';
+import { arch, homedir, platform } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,11 +14,11 @@ import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotoc
 import {
   MCP_NAME,
   REQUIRED_NODE_VERSION,
-  buildAddArguments,
   classifyRegistration,
   createDesiredRegistration,
   isAbsolutePortablePath,
-} from './lib/codex-registration.mjs';
+} from './lib/mcp-registration.mjs';
+import { CLIENT_IDS, resolveClient } from './lib/mcp-clients.mjs';
 
 const EXPECTED_PNPM_VERSION = '11.17.0';
 const EXPECTED_TOOL_COUNT = 38;
@@ -36,11 +36,13 @@ function canonicalPath(value) {
   }
 }
 
-function codexCommand() {
-  const configured = process.env.CODEX_CLI_PATH?.trim();
-  if (configured === undefined || configured === '') return 'codex';
+function clientCommand(client) {
+  const configured = process.env[client.pathEnvironmentVariable]?.trim();
+  if (configured === undefined || configured === '') return client.binary;
   if (!isAbsolutePortablePath(configured) || !existsSync(configured)) {
-    throw new Error(`CODEX_CLI_PATH 已設定但不是存在的絕對路徑：${configured}`);
+    throw new Error(
+      `${client.pathEnvironmentVariable} 已設定但不是存在的絕對路徑：${configured}`,
+    );
   }
   return configured;
 }
@@ -67,20 +69,42 @@ function summarizeCommandFailure(label, result) {
   return `${label} 失敗（exit ${String(result.status)}）${detail === '' ? '' : `：${detail}`}`;
 }
 
-function listCodexServers() {
-  const result = run(codexCommand(), ['mcp', 'list', '--json']);
-  if (result.status !== 0) throw new Error(summarizeCommandFailure('codex mcp list', result));
+function readViaCli(client) {
+  const label = `${client.binary} ${client.read.args.join(' ')}`;
+  const result = run(clientCommand(client), client.read.args);
+  if (result.status !== 0) throw new Error(summarizeCommandFailure(label, result));
   try {
     const parsed = JSON.parse(result.stdout);
     if (!Array.isArray(parsed)) throw new Error('輸出不是陣列');
-    return parsed;
+    return parsed.find((server) => server?.name === MCP_NAME) ?? null;
   } catch (error) {
-    throw new Error(`codex mcp list --json 回傳無法解析的資料：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `${label} 回傳無法解析的資料：${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
-function currentRegistration() {
-  return listCodexServers().find((server) => server?.name === MCP_NAME) ?? null;
+/**
+ * claude／gemini 的 `mcp list` 只有人類可讀輸出且不含 env，無法用來判斷既有
+ * 設定是否相容。這裡唯讀它們官方 CLI 剛寫入的設定檔；寫入永遠走 CLI。
+ */
+function readViaConfigFile(client) {
+  const path = client.read.configPath(homedir());
+  if (!existsSync(path)) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `${client.label} 設定檔無法解析：${path}（${error instanceof Error ? error.message : String(error)}）`,
+    );
+  }
+  return client.read.extract(parsed, MCP_NAME);
+}
+
+function currentRegistration(client) {
+  const raw = client.read.kind === 'cli-json' ? readViaCli(client) : readViaConfigFile(client);
+  return client.normalizeListed(raw, MCP_NAME);
 }
 
 function desiredState() {
@@ -138,13 +162,13 @@ function requireInstallPrerequisites() {
   }
 }
 
-function mismatchMessage(classification) {
+function mismatchMessage(client, classification) {
   const details = classification.differences.length > 0
     ? `\n- ${classification.differences.join('\n- ')}`
     : '';
   return (
-    `Codex 已有同名 ${MCP_NAME} 設定，但與這份工作樹不相容。為避免遺失既有 timeout、tool policy 或其他設定，安裝器不會自動覆寫。` +
-    `${details}\n請先確認那份設定的用途；若確定不要它，再明確執行 codex mcp remove ${MCP_NAME}，之後重跑安裝。`
+    `${client.label} 已有同名 ${MCP_NAME} 設定，但與這份工作樹不相容。為避免遺失既有 timeout、tool policy 或其他設定，安裝器不會自動覆寫。` +
+    `${details}\n請先確認那份設定的用途；若確定不要它，再明確執行 ${client.binary} mcp remove ${MCP_NAME}，之後重跑安裝。`
   );
 }
 
@@ -245,57 +269,59 @@ async function smokeRegistration(registration, label) {
   return listeningPort;
 }
 
-async function install() {
+async function install(client) {
   requireInstallPrerequisites();
   const desired = desiredState();
-  const before = currentRegistration();
+  const before = currentRegistration(client);
   const { classification } = classifyCurrentRegistration(before, desired);
 
   if (classification.kind === 'exact') {
-    await smokeRegistration(before, '現有 Codex entry');
-    process.stdout.write(`BlockHand 已正確登記，沒有修改設定。\n`);
+    await smokeRegistration(before, `現有 ${client.label} entry`);
+    process.stdout.write(`BlockHand 已在 ${client.label} 正確登記，沒有修改設定。\n`);
     return;
   }
   if (classification.kind === 'compatible') {
-    await smokeRegistration(before, '現有 Codex entry');
+    await smokeRegistration(before, `現有 ${client.label} entry`);
     process.stdout.write(
-      `BlockHand 已用同一工作樹的相容設定登記，保留既有設定不做 remove/add。\n` +
+      `BlockHand 已用同一工作樹的相容設定登記到 ${client.label}，保留既有設定不做 remove/add。\n` +
       `執行 corepack pnpm run doctor 可檢查目前 Node 與完整 MCP 生命週期。\n`,
     );
     return;
   }
-  if (classification.kind !== 'missing') throw new Error(mismatchMessage(classification));
+  if (classification.kind !== 'missing') throw new Error(mismatchMessage(client, classification));
 
-  // 先用將要寫入 Codex 的精確 command／args／env 完成 initialize；舊 dist、
-  // 錯誤 launcher 或不可執行 Node 都會在任何持久設定變更之前失敗。
+  // 先用將要寫入的精確 command／args／env 完成 initialize；舊 dist、錯誤
+  // launcher 或不可執行 Node 都會在任何持久設定變更之前失敗。
   await smokeRegistration(desired, '待登記 entry');
 
-  const result = run(codexCommand(), buildAddArguments(desired));
-  if (result.status !== 0) throw new Error(summarizeCommandFailure('codex mcp add', result));
+  const result = run(clientCommand(client), client.buildAddArguments(desired));
+  if (result.status !== 0) {
+    throw new Error(summarizeCommandFailure(`${client.binary} mcp add`, result));
+  }
 
-  const after = currentRegistration();
+  const after = currentRegistration(client);
   const verified = classifyCurrentRegistration(after, desired).classification;
   if (verified.kind !== 'exact') {
     throw new Error(
-      `Codex 回報新增完成，但重新讀取後設定不一致。請執行 corepack pnpm run doctor 查看細節；安裝器沒有改寫其他 entry。`,
+      `${client.label} 回報新增完成，但重新讀取後設定不一致。請執行 corepack pnpm run doctor 查看細節；安裝器沒有改寫其他 entry。`,
     );
   }
 
   process.stdout.write(
-    `BlockHand 已登記到這台機器。請完全退出並重啟 Codex；同一台機器的桌面版、CLI 與 IDE 會共用這份設定。\n`,
+    `BlockHand 已登記到這台機器的 ${client.label}（${client.configHint}）。\n${client.restartHint}\n`,
   );
 }
 
-function uninstall() {
+function uninstall(client) {
   const desired = desiredState();
-  const existing = currentRegistration();
+  const existing = currentRegistration(client);
   // uninstall 是使用者明確要求的移除；ownership 只看目前工作樹 fingerprint，
   // 不要求舊 Node 仍可執行，否則 brew/nvm 搬家後反而無法清掉死 entry。
   const classification = classifyRegistration(existing, desired, currentPaths(), {
     registeredNodeUsable: true,
   });
   if (classification.kind === 'missing') {
-    process.stdout.write(`BlockHand 原本就沒有登記，沒有修改設定。\n`);
+    process.stdout.write(`BlockHand 原本就沒有登記到 ${client.label}，沒有修改設定。\n`);
     return;
   }
   if (classification.kind !== 'exact' && classification.kind !== 'compatible') {
@@ -304,10 +330,16 @@ function uninstall() {
     );
   }
 
-  const result = run(codexCommand(), ['mcp', 'remove', MCP_NAME]);
-  if (result.status !== 0) throw new Error(summarizeCommandFailure('codex mcp remove', result));
-  if (currentRegistration() !== null) throw new Error('Codex 回報移除完成，但 entry 仍存在。');
-  process.stdout.write(`已移除這台機器的 BlockHand Codex 登記；專案、Minecraft 與世界都沒有刪除。\n`);
+  const result = run(clientCommand(client), client.buildRemoveArguments(MCP_NAME));
+  if (result.status !== 0) {
+    throw new Error(summarizeCommandFailure(`${client.binary} mcp remove`, result));
+  }
+  if (currentRegistration(client) !== null) {
+    throw new Error(`${client.label} 回報移除完成，但 entry 仍存在。`);
+  }
+  process.stdout.write(
+    `已移除這台機器的 BlockHand ${client.label} 登記；專案、Minecraft 與世界都沒有刪除。\n`,
+  );
 }
 
 function addCheck(checks, id, status, message, detail) {
@@ -382,35 +414,40 @@ function inspectPlatform(checks) {
   );
 }
 
-function inspectRegistration(checks) {
+function inspectRegistration(checks, client) {
   try {
     const desired = desiredState();
-    const entry = currentRegistration();
+    const entry = currentRegistration(client);
     const { node, classification } = classifyCurrentRegistration(entry, desired);
     if (classification.kind === 'exact') {
       addCheck(
         checks,
-        'codex-registration',
+        'client-registration',
         'pass',
-        'Codex 登記使用可執行的絕對 Node 與 launcher 路徑',
+        `${client.label} 登記使用可執行的絕對 Node 與 launcher 路徑`,
         node.detail,
       );
     } else if (classification.kind === 'compatible') {
       addCheck(
         checks,
-        'codex-registration',
+        'client-registration',
         'warn',
-        'Codex 使用同一工作樹的相容既有設定；保留 timeout／tool policy，不強制遷移',
+        `${client.label} 使用同一工作樹的相容既有設定；保留 timeout／tool policy，不強制遷移`,
         [node.detail, ...classification.differences].filter(Boolean).join('；'),
       );
     } else if (classification.kind === 'missing') {
-      addCheck(checks, 'codex-registration', 'fail', '尚未在這台機器登記；請執行 corepack pnpm run setup:codex');
+      addCheck(
+        checks,
+        'client-registration',
+        'fail',
+        `尚未在這台機器登記到 ${client.label}；請執行 corepack pnpm run setup:${client.id}`,
+      );
     } else {
       addCheck(
         checks,
-        'codex-registration',
+        'client-registration',
         'fail',
-        `同名 Codex entry 與這份工作樹不相容（${classification.kind}）`,
+        `同名 ${client.label} entry 與這份工作樹不相容（${classification.kind}）`,
         classification.differences.join('；'),
       );
     }
@@ -418,38 +455,43 @@ function inspectRegistration(checks) {
   } catch (error) {
     addCheck(
       checks,
-      'codex-cli',
+      'client-cli',
       'fail',
-      '無法讀取 Codex MCP 設定',
+      `無法讀取 ${client.label} MCP 設定`,
       error instanceof Error ? error.message : String(error),
     );
     return null;
   }
 }
 
-async function inspectConfiguredSmoke(checks, registrationState) {
+async function inspectConfiguredSmoke(checks, registrationState, client) {
   if (
     registrationState === null ||
     (registrationState.classification.kind !== 'exact' &&
       registrationState.classification.kind !== 'compatible')
   ) {
-    addCheck(checks, 'registered-entry-smoke', 'fail', 'Codex entry 不可用，未執行實際 registration smoke');
+    addCheck(
+      checks,
+      'registered-entry-smoke',
+      'fail',
+      `${client.label} entry 不可用，未執行實際 registration smoke`,
+    );
     return;
   }
   try {
-    const port = await smokeRegistration(registrationState.entry, 'Codex 實際 entry');
+    const port = await smokeRegistration(registrationState.entry, `${client.label} 實際 entry`);
     addCheck(
       checks,
       'registered-entry-smoke',
       'pass',
-      `已用 Codex 登記的 command／args／env 完成 initialize，隔離埠 ${String(port)} 已釋放`,
+      `已用 ${client.label} 登記的 command／args／env 完成 initialize，隔離埠 ${String(port)} 已釋放`,
     );
   } catch (error) {
     addCheck(
       checks,
       'registered-entry-smoke',
       'fail',
-      'Codex 實際 entry 無法完成 MCP initialize',
+      `${client.label} 實際 entry 無法完成 MCP initialize`,
       error instanceof Error ? error.message : String(error),
     );
   }
@@ -482,7 +524,7 @@ function inspectSmoke(checks) {
   }
 }
 
-async function doctor({ json }) {
+async function doctor({ json, client }) {
   const checks = [];
   addCheck(
     checks,
@@ -500,16 +542,16 @@ async function doctor({ json }) {
   );
   inspectPnpm(checks);
   inspectPlatform(checks);
-  const registrationState = inspectRegistration(checks);
+  const registrationState = inspectRegistration(checks, client);
   inspectSmoke(checks);
-  await inspectConfiguredSmoke(checks, registrationState);
+  await inspectConfiguredSmoke(checks, registrationState, client);
 
   const failedIds = new Set(checks.filter((check) => check.status === 'fail').map((check) => check.id));
   const mcpReady = ![
     'node-version',
     'build-output',
-    'codex-cli',
-    'codex-registration',
+    'client-cli',
+    'client-registration',
     'mcp-smoke',
     'registered-entry-smoke',
   ].some((id) => failedIds.has(id));
@@ -525,6 +567,7 @@ async function doctor({ json }) {
     developmentEnvironmentReady,
     persistentChanges: false,
     projectRoot: PROJECT_ROOT,
+    client: client.id,
     checks,
     macLiveVerified: false,
   };
@@ -532,7 +575,9 @@ async function doctor({ json }) {
   if (json) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   } else {
-    process.stdout.write('BlockHand doctor（不修改持久設定、不啟動 Minecraft）\n\n');
+    process.stdout.write(
+      `BlockHand doctor — ${client.label}（不修改持久設定、不啟動 Minecraft）\n\n`,
+    );
     for (const check of checks) {
       const marker = check.status === 'pass' ? '✓' : check.status === 'warn' ? '!' : '✗';
       process.stdout.write(`${marker} ${check.message}${check.detail ? `\n  ${check.detail}` : ''}\n`);
@@ -547,19 +592,21 @@ async function doctor({ json }) {
 function connectGuide() {
   process.stdout.write(
     `BlockHand 不會操作前景視窗或替你輸入鍵盤。\n` +
-    `請在目前 Codex task 呼叫 mc_status，查看它回傳的 connectCommand；進入已開啟 Cheats 的 Minecraft Education 世界後，手動輸入到聊天列。\n` +
+    `請在目前的 AI 對話中呼叫 mc_status，查看它回傳的 connectCommand；進入已開啟 Cheats 的 Minecraft Education 世界後，手動輸入到聊天列。\n` +
+    `重連時在聊天列按 T 再按 ↑ 就能叫回上一條指令。\n` +
     `埠可能因同時開啟多個 MCP task 而變動，所以不要固定背 19131。\n`,
   );
 }
 
 function usage() {
   process.stdout.write(
-    `用法：\n` +
-    `  corepack pnpm blockhand install       在這台機器登記 Codex MCP\n` +
-    `  corepack pnpm blockhand doctor        執行不碰 Minecraft 的診斷\n` +
-    `  corepack pnpm blockhand doctor --json 輸出結構化診斷\n` +
-    `  corepack pnpm blockhand connect       顯示安全的手動連線指引\n` +
-    `  corepack pnpm blockhand uninstall     移除這台機器的 Codex MCP 登記\n`,
+    `用法（--client 預設 codex，可選 ${CLIENT_IDS.join('｜')}）：\n` +
+    `  corepack pnpm blockhand install [--client=X]    在這台機器登記 MCP\n` +
+    `  corepack pnpm blockhand doctor [--client=X]     執行不碰 Minecraft 的診斷\n` +
+    `  corepack pnpm blockhand doctor --json           輸出結構化診斷\n` +
+    `  corepack pnpm blockhand connect                 顯示安全的手動連線指引\n` +
+    `  corepack pnpm blockhand uninstall [--client=X]  移除這台機器的 MCP 登記\n` +
+    `\n捷徑：corepack pnpm run setup:codex｜setup:claude｜setup:gemini｜setup:grok\n`,
   );
 }
 
@@ -571,20 +618,48 @@ function requireNoArguments(command, arguments_) {
   }
 }
 
+/**
+ * 只認 `--client=<id>` 這一種寫法。分開的 `--client X` 會讓 `uninstall X` 這類
+ * 打錯的指令看起來合法，寧可嚴格一點。未知旗標仍由 requireNoArguments 擋下。
+ */
+function extractClient(command, arguments_) {
+  const rest = [];
+  let id = 'codex';
+  let seen = false;
+  for (const argument of arguments_) {
+    const match = /^--client=(.+)$/u.exec(argument);
+    if (match === null) {
+      rest.push(argument);
+      continue;
+    }
+    if (seen) throw new UsageError(`${command} 只接受一次 --client`);
+    seen = true;
+    id = match[1];
+  }
+  try {
+    return { client: resolveClient(id), rest };
+  } catch (error) {
+    throw new UsageError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function parseDoctorArguments(arguments_) {
-  if (arguments_.length === 0) return { json: false };
-  if (arguments_.length === 1 && arguments_[0] === '--json') return { json: true };
-  throw new UsageError(`doctor 只接受一次 --json；收到：${arguments_.join(' ')}`);
+  const { client, rest } = extractClient('doctor', arguments_);
+  if (rest.length === 0) return { json: false, client };
+  if (rest.length === 1 && rest[0] === '--json') return { json: true, client };
+  throw new UsageError(`doctor 只接受一次 --json 與一次 --client；收到：${arguments_.join(' ')}`);
 }
 
 const [command, ...arguments_] = process.argv.slice(2);
 try {
   if (command === 'install') {
-    requireNoArguments(command, arguments_);
-    await install();
+    const { client, rest } = extractClient(command, arguments_);
+    requireNoArguments(command, rest);
+    await install(client);
   } else if (command === 'uninstall') {
-    requireNoArguments(command, arguments_);
-    uninstall();
+    const { client, rest } = extractClient(command, arguments_);
+    requireNoArguments(command, rest);
+    uninstall(client);
   } else if (command === 'doctor') {
     await doctor(parseDoctorArguments(arguments_));
   } else if (command === 'connect') {

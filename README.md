@@ -5,7 +5,7 @@
 透過 Minecraft Education 官方文件化的 `/wsserver` 連線命令（`/connect` 是 alias）操作，不注入行程、不改遊戲檔案、不用畫面辨識。連線命令是官方介面；後續 WebSocket 訊息協定並沒有公開穩定性保證，因此遊戲改版後仍需重新驗證。
 
 - 38 個工具、2 份 resource
-- 123 項單元與整合測試、1 支不需開遊戲的 stdio／程序生命週期 smoke、1 支真機 live 驗證
+- 142 項單元與整合測試、1 支不需開遊戲的 stdio／程序生命週期 smoke、1 支真機 live 驗證
 - 不需要任何帳號、token 或祕密；MCP runtime 只綁 loopback，不寫遊戲檔或 artifact
 
 ---
@@ -46,50 +46,50 @@ node -p "process.execPath"
 
 下面用 `<NODE>` 代表 Node 絕對路徑、`<REPO>` 代表專案絕對路徑。伺服器進入點固定是 `<REPO>/dist/index.js`（Windows 寫成 `<REPO>\dist\index.js`）。路徑含空白時整段要加引號。
 
-#### Codex
-
-有專用安裝器，會自己填絕對路徑、比對既有設定、不覆寫陌生 entry：
+#### 用安裝器（四家都支援，建議）
 
 ```bash
-corepack pnpm run setup:codex
-corepack pnpm run doctor
+corepack pnpm run setup:codex     # 或 setup:claude / setup:gemini / setup:grok
+corepack pnpm run doctor          # 加 --client=claude 等可診斷其他家
 ```
 
-安裝器把「這台機器的絕對 Node 路徑」與跨平台 launcher 登記到 `~/.codex/config.toml`，只透過官方 `codex mcp` 指令操作：
+安裝器不是只把指令寫進設定檔，它會：
 
-- 沒有同名 entry：新增。
-- 已是同一工作樹、且絕對 Node 路徑可執行的正確／相容設定：實際 initialize 通過後 no-op，保留既有 timeout 與 tool policy。
-- 同名但不相容：停止並顯示差異，不自動 remove/add。
+- **自動填入這台機器的絕對 Node 路徑**，不依賴桌面程式能否讀到 nvm、Homebrew 或 shell PATH。
+- **先跑一次真正的 MCP initialize**（用即將寫入的 command／args／env），確認 38 個工具都在，才動任何持久設定。舊 dist、錯誤 launcher、不可執行的 Node 都會在寫入之前就失敗。
+- **已正確登記時什麼都不做**，重跑安全。
+- **同名但不相容時停下並列出差異**，不自動 remove/add，避免覆寫別人的 timeout、tool policy 或另一個 clone 的設定。
+- **只透過各家官方 `mcp add`／`mcp remove` 子指令寫入**，不手改設定檔——那會繞過各家自己的 schema 驗證與 scope 解析。
 
-手動等價指令：
+移除用 `corepack pnpm run uninstall:codex`（或 `uninstall:claude` 等）。同樣有防誤刪：不是這份工作樹可辨識的 entry 就拒絕。
+
+各家寫入位置與重啟需求：
+
+| Client | 寫入 | 之後 |
+|---|---|---|
+| Codex | `~/.codex/config.toml` | 完全退出並重啟；桌面版／CLI／IDE 共用 |
+| Claude Code | `~/.claude.json`（user scope） | 重開 session |
+| Gemini CLI | `~/.gemini/settings.json`（user scope） | 重開 CLI |
+| Grok CLI | `~/.grok/config.toml` | 重開 CLI |
+
+> 讀取策略有差異：Codex 與 Grok 有 `mcp list --json`，直接用機器可讀輸出。Claude Code 與 Gemini 的 `list` 只有人類可讀文字且不含 env，無法據以判斷相容性，所以改**唯讀**它們官方 CLI 剛寫入的設定檔。寫入永遠走 CLI。
+
+#### 手動指令（不想用安裝器時）
+
+指令等價，但**絕對路徑要自己填**，也沒有前置的 initialize 驗證與覆寫保護。
 
 ```bash
-codex mcp add minecraft-edu --env MINECRAFT_EDU_WS_PORT=19131 -- <NODE> <REPO>/dist/index.js
+codex  mcp add minecraft-edu --env MINECRAFT_EDU_WS_PORT=19131 -- <NODE> <REPO>/dist/index.js
+claude mcp add minecraft-edu --scope user --env MINECRAFT_EDU_WS_PORT=19131 -- <NODE> <REPO>/dist/index.js
+gemini mcp add minecraft-edu <NODE> <REPO>/dist/index.js --scope user --env MINECRAFT_EDU_WS_PORT=19131
+grok   mcp add minecraft-edu --scope user --env MINECRAFT_EDU_WS_PORT=19131 -- <NODE> <REPO>/dist/index.js
 ```
 
-#### Claude Code
+三個容易踩的差異：
 
-```bash
-claude mcp add minecraft-edu -s user -e MINECRAFT_EDU_WS_PORT=19131 -- <NODE> <REPO>/dist/index.js
-```
-
-`-s user` 寫進 `~/.claude.json`，所有專案都能用。改成 `-s project` 會寫進專案根目錄的 `.mcp.json`，可以隨 repo 分享——**整班共用時用這個**，學生 clone 下來就有設定，只是各自的絕對路徑不同，仍要各自跑一次。
-
-#### Gemini CLI
-
-```bash
-gemini mcp add minecraft-edu <NODE> <REPO>/dist/index.js -s user -e MINECRAFT_EDU_WS_PORT=19131
-```
-
-注意 `gemini mcp add` 的**預設 scope 是 project**，要全域可用必須明寫 `-s user`（寫進 `~/.gemini/settings.json`）。另外它的 command 與 args 是直接接在名稱後面，不用 `--` 分隔。
-
-#### Grok CLI
-
-```bash
-grok mcp add minecraft-edu -s user -e MINECRAFT_EDU_WS_PORT=19131 -- <NODE> <REPO>/dist/index.js
-```
-
-寫進 `~/.grok/config.toml`。`--` 之後的參數才會傳給 server 而不是被 grok 自己吃掉。
+- **Gemini 的 command 與 args 是位置參數**，接在名稱後面，**沒有** `--` 分隔。
+- **Gemini 的預設 scope 是 project**，要全域可用必須明寫 `--scope user`。
+- **Claude 的預設 scope 是 local**（只在目前目錄生效）；`--scope project` 會寫進專案根的 `.mcp.json`，可隨 repo 分享，**整班共用時用這個**。
 
 #### 手動編設定檔（安裝器失效時的後備）
 
@@ -124,7 +124,13 @@ env = { MINECRAFT_EDU_WS_PORT = "19131" }
 
 #### 登記後
 
-**完全退出並重啟該 AI 工具**——桌面版要真的結束程式，不是關掉視窗。然後確認：
+**完全退出並重啟該 AI 工具**——桌面版要真的結束程式，不是關掉視窗。然後用 doctor 確認（不碰 Minecraft、不改設定）：
+
+```bash
+corepack pnpm run doctor
+```
+
+它會檢查 Node 版本、build 產物、平台需求、登記狀態，並用**實際登記的** command／args／env 再跑一次 MCP initialize，避免設定指向失效 Node 卻假綠。加 `--json` 可得結構化輸出。也可以直接問各家 CLI：
 
 ```bash
 codex mcp list
@@ -279,7 +285,7 @@ BlockHand 的管線是：
 **不做的事**
 
 - 不連外網：只在 `127.0.0.1` 開 WebSocket 監聽。
-- MCP runtime 不寫檔案：沒有任何 artifact 輸出路徑。只有使用者明確執行 `setup:codex`／`uninstall:codex` 時，官方 Codex CLI 才會更新本機 MCP 設定。
+- MCP runtime 不寫檔案：沒有任何 artifact 輸出路徑。只有使用者明確執行 `setup:<client>`／`uninstall:<client>` 時，該家官方 CLI 才會更新本機 MCP 設定。
 - 不碰祕密：整個專案沒有 token、帳號或憑證。
 - 不主動連線：遊戲不 `/connect` 進來，所有工具都回可照做的錯誤訊息，不會靜默失敗。
 

@@ -3,7 +3,7 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { REQUIRED_NODE_VERSION } from './lib/codex-registration.mjs';
+import { REQUIRED_NODE_VERSION } from './lib/mcp-registration.mjs';
 
 const RUNTIME_URL = new URL('../dist/index.js', import.meta.url);
 const RUNTIME_PATH = fileURLToPath(RUNTIME_URL);

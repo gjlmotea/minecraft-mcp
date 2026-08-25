@@ -6,14 +6,13 @@ import { describe, expect, it } from 'vitest';
 import {
   MCP_NAME,
   REQUIRED_ENV,
-  buildAddArguments,
   classifyRegistration,
   createDesiredRegistration,
   isAbsolutePortablePath,
   isBlockHandEntryPath,
   normalizeComparablePath,
   samePath,
-} from '../../scripts/lib/codex-registration.mjs';
+} from '../../scripts/lib/mcp-registration.mjs';
 
 const blockhandCli = fileURLToPath(new URL('../../scripts/blockhand.mjs', import.meta.url));
 
@@ -159,25 +158,6 @@ describe('Codex registration classification', () => {
     expect(bare.differences).toContain('Node command 不是絕對路徑');
     expect(missing.kind).toBe('blockhand-mismatch');
     expect(missing.differences.join('\n')).toContain('不存在、無法執行');
-  });
-});
-
-describe('codex mcp add arguments', () => {
-  it('使用 argv array 保留所有路徑，不經 shell quote 或字串拼接', () => {
-    expect(buildAddArguments(macDesired)).toEqual([
-      'mcp',
-      'add',
-      'minecraft-edu',
-      '--env',
-      'MINECRAFT_EDU_WS_HOST=127.0.0.1',
-      '--env',
-      'MINECRAFT_EDU_WS_PORT=19131',
-      '--env',
-      'MINECRAFT_EDU_WS_PORT_FALLBACK=1',
-      '--',
-      '/Users/墨茶/.nvm/versions/node/v22.23.1/bin/node',
-      '/Users/墨茶/My Projects/minecraft-edu/scripts/launch-mcp.mjs',
-    ]);
   });
 });
 
