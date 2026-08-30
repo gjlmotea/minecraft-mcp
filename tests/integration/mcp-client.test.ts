@@ -27,7 +27,6 @@ const CONFIG = {
   stepDelayMs: 0,
   debugFrames: false,
   negotiateEncryption: false,
-  classroomGuard: true,
 };
 
 async function connect(fake: FakeConnection): Promise<Client> {
@@ -289,57 +288,6 @@ describe('MCP 工具面', () => {
       'minecraft-edu://capabilities',
       'minecraft-edu://connection',
     ]);
-  });
-});
-
-/**
- * 課堂防護的 domain 測試只證明「函式判斷正確」，不證明「有接上工具」。
- * 這裡走真正的 MCP 工具面，因為漏接是這種防護最典型的失效方式——
- * 看起來有防護，實際上兩條路都通。
- */
-describe('課堂防護接線', () => {
-  let fake: FakeConnection;
-  let client: Client;
-
-  beforeEach(async () => {
-    fake = createFakeConnection();
-    client = await connect(fake);
-  });
-
-  it('mc_player_action 用 @a 殺人會被擋下', async () => {
-    const result = await client.callTool({
-      name: 'mc_player_action',
-      arguments: { action: 'kill', target: '@a' },
-    });
-    expect(result.isError).toBe(true);
-    const text = (result.content as { type: string; text: string }[])[0]?.text ?? '';
-    expect(text).toContain('指名道姓');
-  });
-
-  it('mc_player_action 指名道姓時放行', async () => {
-    const result = await client.callTool({
-      name: 'mc_player_action',
-      arguments: { action: 'kill', target: 'LinChihYu' },
-    });
-    expect(result.isError).toBeFalsy();
-  });
-
-  it('mc_run_command 走 raw kill 也被擋下，不能繞過專用工具的防護', async () => {
-    const result = await client.callTool({
-      name: 'mc_run_command',
-      arguments: { command: 'kill @a' },
-    });
-    expect(result.isError).toBe(true);
-    const text = (result.content as { type: string; text: string }[])[0]?.text ?? '';
-    expect(text).toContain('MINECRAFT_EDU_CLASSROOM_GUARD=0');
-  });
-
-  it('建造指令不受防護影響', async () => {
-    const result = await client.callTool({
-      name: 'mc_run_command',
-      arguments: { command: 'fill 0 64 0 4 64 4 stone' },
-    });
-    expect(result.isError).toBeFalsy();
   });
 });
 

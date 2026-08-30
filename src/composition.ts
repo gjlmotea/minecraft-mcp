@@ -14,7 +14,6 @@ export interface RuntimeConfig {
   readonly stepDelayMs: number;
   readonly debugFrames: boolean;
   readonly negotiateEncryption: boolean;
-  readonly classroomGuard: boolean;
 }
 
 const DEFAULTS: RuntimeConfig = {
@@ -28,7 +27,6 @@ const DEFAULTS: RuntimeConfig = {
   stepDelayMs: 100,
   debugFrames: false,
   negotiateEncryption: true,
-  classroomGuard: true,
 };
 
 function readInt(name: string, fallback: number, min: number, max: number): number {
@@ -63,8 +61,6 @@ export function readRuntimeConfig(): RuntimeConfig {
     // 預設嘗試握手。Education 的「需要加密的 WebSocket」開啟時這是必要的，
     // 關閉時握手失敗也只會退回明文，所以預設開著沒有壞處。
     negotiateEncryption: process.env['MINECRAFT_EDU_ENCRYPTION'] !== '0',
-    // 預設開啟：這個專案的使用現場是教室，安全預設比方便預設重要。
-    classroomGuard: process.env['MINECRAFT_EDU_CLASSROOM_GUARD'] !== '0',
   };
 }
 
@@ -85,7 +81,6 @@ export function composeRuntime(version: string, config: RuntimeConfig, connectio
   const service = createBlockHandService(activeConnection, {
     version,
     defaultStepDelayMs: config.stepDelayMs,
-    classroomGuard: config.classroomGuard,
   });
 
   const build = createBuildService(activeConnection, { maxBuildBlocks: config.maxBuildBlocks });

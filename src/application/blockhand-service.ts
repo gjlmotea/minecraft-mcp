@@ -15,7 +15,6 @@ import { KNOWN_EVENT_NAMES } from '../domain/contracts.js';
 import { agentCommands } from '../domain/commands.js';
 import type { CommandAssessment } from '../domain/command-policy.js';
 import { assessRawCommand } from '../domain/command-policy.js';
-import { assertClassroomAllowsVerb } from '../domain/classroom-guard.js';
 import type { MinecraftConnection, SequenceOptions } from '../ports/minecraft-connection.js';
 
 export interface AgentMoveStep {
@@ -130,8 +129,6 @@ export function parseQueryTargetDetails(outcome: CommandOutcome): unknown {
 export interface BlockHandServiceOptions {
   readonly version: string;
   readonly defaultStepDelayMs: number;
-  /** 課堂防護：作用在玩家身上的動作必須指名道姓。預設開啟。 */
-  readonly classroomGuard: boolean;
 }
 
 export function createBlockHandService(
@@ -178,12 +175,8 @@ export function createBlockHandService(
       });
     },
 
-    classroomGuard: options.classroomGuard,
-
     assessRaw(commandLine: string): CommandAssessment {
-      const assessment = assessRawCommand(commandLine);
-      assertClassroomAllowsVerb(assessment.verb, options.classroomGuard);
-      return assessment;
+      return assessRawCommand(commandLine);
     },
 
     async runAgentProgram(

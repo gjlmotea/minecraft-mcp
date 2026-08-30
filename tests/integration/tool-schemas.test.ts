@@ -17,7 +17,6 @@ const CONFIG = {
   stepDelayMs: 0,
   debugFrames: false,
   negotiateEncryption: false,
-  classroomGuard: true,
 };
 
 /** 回傳 schema 裡所有 `$ref` 的出現位置，方便失敗時直接指出是哪個欄位。 */
