@@ -7,7 +7,7 @@ import {
   FILL_MODES,
   TURN_DIRECTIONS,
 } from '../domain/contracts.js';
-import { AXES, STAIR_DIRECTIONS } from '../domain/build/shapes.js';
+import { AXES, ROOF_STYLES, STAIR_DIRECTIONS } from '../domain/build/shapes.js';
 
 /*
  * 為什麼這裡每個共用片段都是 function 而不是 const？
@@ -178,6 +178,12 @@ export const shapeSchema = () =>
         center: vec3Schema(),
         radius: z.number().min(1).max(128),
         height: z.number().int().min(1).max(384),
+        topRadius: z
+          .number()
+          .min(0)
+          .max(128)
+          .default(0)
+          .describe('頂面半徑；0 是傳統圓錐，大於 0 就是圓錐台（煙囪、塔身、橋墩）'),
         axis: axisSchema().default('y'),
         hollow: z.boolean().default(false),
       })
@@ -192,6 +198,12 @@ export const shapeSchema = () =>
           .max(128)
           .describe('底面中心到「邊」的距離，不是到頂點；底邊長 = 2×baseRadius+1'),
         height: z.number().int().min(1).max(384),
+        topRadius: z
+          .number()
+          .min(0)
+          .max(128)
+          .default(0)
+          .describe('頂面半徑；0 收成尖點，大於 0 就是角錐台（城堡塔身、神廟基座）'),
         sides: z.number().int().min(3).max(12).default(4).describe('4 是傳統方底，3 三角錐，6 六角錐'),
         rotation: z.number().min(-360).max(360).default(0).describe('底面繞 Y 軸轉幾度'),
         hollow: z.boolean().default(false),
@@ -334,6 +346,113 @@ export const shapeSchema = () =>
         rotation: z.number().min(-360).max(360).default(0).describe('繞軸旋轉幾度，用來對齊某一邊的朝向'),
         axis: axisSchema().default('y'),
         hollow: z.boolean().default(false),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('polywall'),
+        points: z
+          .array(vec3Schema())
+          .min(2)
+          .max(32)
+          .describe('XZ 折線的轉折點，轉角不會被磨圓（curve 會）；Y 取第一點當牆基'),
+        height: z.number().int().min(1).max(384),
+        thickness: z.number().int().min(1).max(32).default(1),
+        closed: z.boolean().default(false).describe('true 首尾相接，圍成一圈'),
+        battlement: z.boolean().default(false).describe('頂層做成城垛，沿路徑交替留空'),
+        merlonWidth: z.number().int().min(1).max(32).default(2).describe('城垛的垛與缺口各幾格'),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('ribbon'),
+        points: z.array(vec3Schema()).min(2).max(32).describe('XZ 折線；Y 取第一點當路面高度'),
+        width: z.number().min(1).max(64).default(3).describe('往兩側攤開的總寬'),
+        thickness: z.number().int().min(1).max(64).default(1).describe('往上疊幾層'),
+        closed: z.boolean().default(false),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('heightfield'),
+        from: vec3Schema().describe('地皮的一角；Y 是地基高度'),
+        to: vec3Schema().describe('地皮的對角'),
+        corners: z
+          .object({
+            nw: z.number().min(0).max(384).default(1),
+            ne: z.number().min(0).max(384).default(1),
+            sw: z.number().min(0).max(384).default(1),
+            se: z.number().min(0).max(384).default(1),
+          })
+          .strict()
+          .default({ nw: 1, ne: 1, sw: 1, se: 1 })
+          .describe('四角相對 from.y 的高度，中間雙線性內插。−X 是西、−Z 是北'),
+        waves: z
+          .object({
+            amplitude: z.number().min(0).max(128),
+            wavelength: z.number().min(1).max(512),
+          })
+          .strict()
+          .nullable()
+          .default(null)
+          .describe('疊在四角內插之上的正弦起伏；不需要就給 null'),
+        solid: z
+          .boolean()
+          .default(true)
+          .describe('true 從 from.y 填實到地表，false 只鋪地表那一層皮'),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('spiralStairs'),
+        center: vec3Schema().describe('螺旋軸的底部中心'),
+        radius: z.number().min(1).max(128).describe('踏面外半徑'),
+        innerRadius: z.number().min(0).max(128).default(0).describe('中間留洞的半徑；0 是實心到軸'),
+        height: z.number().int().min(1).max(384),
+        turns: z.number().min(0.25).max(64).describe('總共繞幾圈'),
+        clockwise: z.boolean().default(true).describe('由上往下看的旋轉方向'),
+        stepRise: z.number().int().min(1).max(8).default(1).describe('每階上升幾格'),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('cross'),
+        center: vec3Schema(),
+        radius: z.number().min(1).max(128).describe('中心到臂端的距離'),
+        armWidth: z.number().int().min(1).max(64).default(1).describe('臂寬（格）'),
+        height: z.number().int().min(1).max(384),
+        axis: axisSchema().default('y'),
+        hollow: z.boolean().default(false),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('star'),
+        center: vec3Schema(),
+        points: z.number().int().min(3).max(12).default(5).describe('幾角星'),
+        outerRadius: z.number().min(2).max(128).describe('星芒尖端的半徑'),
+        innerRadius: z.number().min(1).max(128).describe('凹處的半徑，必須小於 outerRadius'),
+        height: z.number().int().min(1).max(384).default(1),
+        rotation: z.number().min(-360).max(360).default(0),
+        axis: axisSchema().default('y'),
+        hollow: z.boolean().default(false),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('roof'),
+        from: vec3Schema().describe('屋頂底面的一角；Y 是屋簷高度'),
+        to: vec3Schema().describe('屋頂底面的對角'),
+        height: z.number().int().min(1).max(384).describe('從屋簷到屋脊的高度'),
+        style: z
+          .enum(ROOF_STYLES)
+          .default('gable')
+          .describe('gable 人字（兩坡），hip 四坡（四面都落下）'),
+        ridgeAxis: z
+          .enum(['x', 'z'])
+          .default('x')
+          .describe('屋脊「延伸」的方向，不是坡面朝向的方向；這兩個講法差 90 度'),
+        hollow: z.boolean().default(false).describe('true 只留屋面殼層，不填實內部'),
       })
       .strict(),
   ]);

@@ -169,6 +169,49 @@ describe('MCP 工具面', () => {
     ['arch', { kind: 'arch', center: { x: 0, y: 70, z: 0 }, radius: 4 }],
     ['stairs', { kind: 'stairs', from: { x: 0, y: 70, z: 0 }, direction: 'x+', steps: 6 }],
     ['prism', { kind: 'prism', center: { x: 0, y: 70, z: 0 }, radius: 5, height: 8 }],
+    [
+      'polywall',
+      {
+        kind: 'polywall',
+        points: [
+          { x: 0, y: 70, z: 0 },
+          { x: 12, y: 70, z: 0 },
+          { x: 12, y: 70, z: 12 },
+        ],
+        height: 4,
+      },
+    ],
+    [
+      'ribbon',
+      {
+        kind: 'ribbon',
+        points: [
+          { x: 0, y: 70, z: 0 },
+          { x: 12, y: 70, z: 6 },
+        ],
+      },
+    ],
+    [
+      'heightfield',
+      { kind: 'heightfield', from: { x: 0, y: 70, z: 0 }, to: { x: 15, y: 70, z: 15 } },
+    ],
+    [
+      'spiralStairs',
+      { kind: 'spiralStairs', center: { x: 0, y: 70, z: 0 }, radius: 4, height: 10, turns: 2 },
+    ],
+    ['cross', { kind: 'cross', center: { x: 0, y: 70, z: 0 }, radius: 5, height: 6 }],
+    [
+      'star',
+      { kind: 'star', center: { x: 0, y: 70, z: 0 }, outerRadius: 8, innerRadius: 3 },
+    ],
+    [
+      'roof',
+      { kind: 'roof', from: { x: 0, y: 70, z: 0 }, to: { x: 10, y: 70, z: 8 }, height: 5 },
+    ],
+    [
+      'cone 錐台',
+      { kind: 'cone', center: { x: 0, y: 70, z: 0 }, radius: 8, height: 8, topRadius: 4 },
+    ],
   ])('mc_build_preview 接得住 %s，缺的參數由預設值補齊', async (_kind, shape) => {
     const result = await client.callTool({
       name: 'mc_build_preview',

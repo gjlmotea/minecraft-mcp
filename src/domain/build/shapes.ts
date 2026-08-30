@@ -30,6 +30,13 @@ export const SHAPE_KINDS = [
   'arch',
   'stairs',
   'prism',
+  'polywall',
+  'ribbon',
+  'heightfield',
+  'spiralStairs',
+  'cross',
+  'star',
+  'roof',
 ] as const;
 export type ShapeKind = (typeof SHAPE_KINDS)[number];
 
@@ -69,6 +76,8 @@ export interface ConeShape {
   readonly center: Vec3;
   readonly radius: number;
   readonly height: number;
+  /** 頂面半徑。0 收成尖點（傳統圓錐），大於 0 就是圓錐台。 */
+  readonly topRadius: number;
   readonly axis: Axis;
   readonly hollow: boolean;
 }
@@ -78,6 +87,8 @@ export interface PyramidShape {
   /** 底面中心到「邊」的距離（內切圓半徑），不是到頂點。 */
   readonly baseRadius: number;
   readonly height: number;
+  /** 頂面半徑。0 收成尖點（傳統金字塔），大於 0 就是角錐台／塔身。 */
+  readonly topRadius: number;
   /** 底面邊數。4 就是傳統方底金字塔，3 是三角錐，6 是六角錐。 */
   readonly sides: number;
   /** 底面繞 Y 軸旋轉幾度，用來對齊某一邊的朝向。 */
@@ -140,6 +151,140 @@ export interface RevolutionShape {
   readonly axis: Axis;
   readonly profile: readonly RevolutionProfilePoint[];
   /** true 只留側面殼層，false 每一層都填實。 */
+  readonly hollow: boolean;
+}
+
+/**
+ * 折線牆：沿著 XZ 平面的折線立起一道等厚等高的牆。
+ *
+ * 為什麼不能用 `curve` 代替：Catmull-Rom 會強制把轉角磨圓。實測邊長 20 的
+ * 封閉矩形，產出方塊最大偏離真正的折線 3 格——L 型隔間與矩形城牆都做不出來。
+ * 這裡用的是逐段直線，轉角就是轉角。
+ *
+ * `battlement` 打開時頂層做成城垛：沿路徑每 `merlonWidth` 格交替留空。
+ */
+export interface PolywallShape {
+  readonly kind: 'polywall';
+  /** XZ 折線的轉折點；Y 一律取第一點的高度當牆基。 */
+  readonly points: readonly Vec3[];
+  readonly height: number;
+  readonly thickness: number;
+  readonly closed: boolean;
+  readonly battlement: boolean;
+  readonly merlonWidth: number;
+}
+
+/**
+ * 沿折線鋪設的水平帶：道路、跑道、橋面、河床。
+ *
+ * 與 `polywall` 是同一條路徑的兩種斷面——polywall 往上長（厚度×高度），
+ * ribbon 往兩側攤平（寬度×厚度）。轉角是圓角接合，不會在外側裂開。
+ */
+export interface RibbonShape {
+  readonly kind: 'ribbon';
+  readonly points: readonly Vec3[];
+  readonly width: number;
+  readonly thickness: number;
+  readonly closed: boolean;
+}
+
+/**
+ * 高程地表：一塊矩形地皮，表面高度由四角高度雙線性內插，可再疊上正弦起伏。
+ *
+ * 現有形狀全是閉合幾何體，做不出雙向非對稱的連續起伏。這個形狀的每一層
+ * 水平切面都是連續區塊，是整套形狀裡對 greedy 合併最友善的一個。
+ *
+ * 沒有亂數：同一組參數永遠得到同一塊地，才能被測試釘住。
+ */
+export interface HeightfieldCorners {
+  readonly nw: number;
+  readonly ne: number;
+  readonly sw: number;
+  readonly se: number;
+}
+export interface HeightfieldWaves {
+  readonly amplitude: number;
+  readonly wavelength: number;
+}
+export interface HeightfieldShape {
+  readonly kind: 'heightfield';
+  readonly from: Vec3;
+  readonly to: Vec3;
+  /** 四角相對 from.y 的高度。−X 是西、−Z 是北。 */
+  readonly corners: HeightfieldCorners;
+  readonly waves: HeightfieldWaves | null;
+  /** true 從 from.y 填實到地表，false 只留地表那一層皮。 */
+  readonly solid: boolean;
+}
+
+/**
+ * 螺旋梯：繞軸而上的離散階梯。
+ *
+ * `helix` 是連續的螺旋線沒有踏面，`stairs` 走直線不會繞軸，兩者都不是
+ * 塔內樓梯。每一階是一片扇形踏板，角度隨階數推進。
+ */
+export interface SpiralStairsShape {
+  readonly kind: 'spiralStairs';
+  readonly center: Vec3;
+  readonly radius: number;
+  readonly innerRadius: number;
+  readonly height: number;
+  readonly turns: number;
+  readonly clockwise: boolean;
+  readonly stepRise: number;
+}
+
+/**
+ * 十字柱：兩片等寬的臂在中心交錯。十字架、加號紀念碑、教堂平面。
+ *
+ * `radius` 是中心到臂端的距離，`armWidth` 是臂寬（格）。
+ */
+export interface CrossShape {
+  readonly kind: 'cross';
+  readonly center: Vec3;
+  readonly radius: number;
+  readonly armWidth: number;
+  readonly height: number;
+  readonly axis: Axis;
+  readonly hollow: boolean;
+}
+
+/**
+ * 星形柱：外頂點與內頂點交替的星多邊形拉伸體。
+ *
+ * 邊界半徑在相鄰內外頂點之間線性內插，所以是直邊的星星而不是花瓣。
+ */
+export interface StarShape {
+  readonly kind: 'star';
+  readonly center: Vec3;
+  readonly points: number;
+  readonly outerRadius: number;
+  readonly innerRadius: number;
+  readonly height: number;
+  readonly rotation: number;
+  readonly axis: Axis;
+  readonly hollow: boolean;
+}
+
+export const ROOF_STYLES = ['gable', 'hip'] as const;
+export type RoofStyle = (typeof ROOF_STYLES)[number];
+
+/**
+ * 屋頂。`wedge` 只有單面斜坡，這裡是有屋脊的完整屋頂。
+ *
+ * - gable（人字）：只往 `ridgeAxis` 的**垂直方向**兩側落下，屋脊沿 ridgeAxis 延伸。
+ * - hip（四坡）：四面都落下，高度取兩個方向下降量的較小者，所以短邊會先到頂。
+ *
+ * `ridgeAxis` 指的是**屋脊延伸的方向**，不是坡面朝向的方向——這兩個講法差 90 度，
+ * 是這個形狀最容易填反的參數。
+ */
+export interface RoofShape {
+  readonly kind: 'roof';
+  readonly from: Vec3;
+  readonly to: Vec3;
+  readonly height: number;
+  readonly style: RoofStyle;
+  readonly ridgeAxis: Axis;
   readonly hollow: boolean;
 }
 
@@ -253,10 +398,25 @@ export type ShapeSpec =
   | WedgeShape
   | ArchShape
   | StairsShape
-  | PrismShape;
+  | PrismShape
+  | PolywallShape
+  | RibbonShape
+  | HeightfieldShape
+  | SpiralStairsShape
+  | CrossShape
+  | StarShape
+  | RoofShape;
 
 /** 掃描體積硬上限，避免呼叫端用一個荒謬半徑把行程撐爆。 */
 export const MAX_SCAN_VOLUME = 8_000_000;
+
+/**
+ * 折線類形狀的掃描體積上限，比通用上限嚴格。
+ *
+ * 原因是它們的 inside() 每格都要對所有線段算一次距離，成本是
+ * 體積 × 線段數而不是體積——用通用上限會讓一次呼叫跑上好幾秒。
+ */
+export const MAX_PATH_SCAN_VOLUME = 2_000_000;
 
 interface Bounds {
   readonly min: Vec3;
@@ -515,7 +675,11 @@ function insidePolygon(
   apothem: number,
   normals: readonly PlanarNormal[],
 ): boolean {
-  const limit = apothem + 0.5;
+  // 1e-9 是給浮點雜訊的餘裕：Math.cos(Math.PI / 2) 是 6.1e-17 而不是 0，
+  // 座標最大 128 時誤差約 7.8e-15，遠小於這個餘裕，也遠小於半格的幾何解析度。
+  // 沒有它，limit 剛好落在整數上時（topRadius 內插很容易產生半整數半徑）
+  // 正方形的角落會被靜靜削掉幾格。
+  const limit = apothem + 0.5 + 1e-9;
   for (const normal of normals) {
     if (du * normal.cos + dv * normal.sin > limit) return false;
   }
@@ -538,6 +702,101 @@ function polygonExtent(apothem: number, sides: number, rotationDegrees: number):
     extent = Math.max(extent, Math.abs(circumradius * Math.sin(angle)));
   }
   return Math.ceil(extent + 0.5);
+}
+
+interface PathSegment {
+  readonly ax: number;
+  readonly az: number;
+  readonly dx: number;
+  readonly dz: number;
+  readonly length: number;
+  /** 這條線段起點在整條折線上的累積長度。 */
+  readonly offset: number;
+}
+
+/** 把 XZ 折線攤成線段清單，順便記下累積長度——城垛要靠它知道自己在路徑的第幾格。 */
+function buildPathSegments(points: readonly Vec3[], closed: boolean): PathSegment[] {
+  if (points.length < 2) {
+    throw new MinecraftBridgeError('invalid-shape', '折線至少需要 2 個點。');
+  }
+  if (points.length > 32) {
+    throw new MinecraftBridgeError('shape-too-large', '折線轉折點上限 32 個。');
+  }
+  const ordered = closed ? [...points, points[0]!] : points;
+  const segments: PathSegment[] = [];
+  let offset = 0;
+  for (let index = 0; index < ordered.length - 1; index += 1) {
+    const start = ordered[index]!;
+    const end = ordered[index + 1]!;
+    const dx = end.x - start.x;
+    const dz = end.z - start.z;
+    const length = Math.hypot(dx, dz);
+    if (length === 0) continue;
+    segments.push({ ax: start.x, az: start.z, dx, dz, length, offset });
+    offset += length;
+  }
+  if (segments.length === 0) {
+    throw new MinecraftBridgeError('invalid-shape', '折線的所有點重疊，長度為零。');
+  }
+  return segments;
+}
+
+interface PathHit {
+  readonly distance: number;
+  readonly arcLength: number;
+}
+
+/** XZ 平面上點到折線的最短距離，以及最近落點在折線上的位置。 */
+function nearestOnPath(x: number, z: number, segments: readonly PathSegment[]): PathHit {
+  let bestDistance = Infinity;
+  let bestArc = 0;
+  for (const segment of segments) {
+    const lengthSquared = segment.dx * segment.dx + segment.dz * segment.dz;
+    let t = ((x - segment.ax) * segment.dx + (z - segment.az) * segment.dz) / lengthSquared;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const ex = x - (segment.ax + segment.dx * t);
+    const ez = z - (segment.az + segment.dz * t);
+    const distance = Math.hypot(ex, ez);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestArc = segment.offset + t * segment.length;
+    }
+  }
+  return { distance: bestDistance, arcLength: bestArc };
+}
+
+/** 折線在 XZ 的邊界，外擴 margin。Y 由呼叫端自己給。 */
+function pathBounds(
+  points: readonly Vec3[],
+  margin: number,
+  baseY: number,
+  topY: number,
+): Bounds {
+  const xs = points.map((point) => point.x);
+  const zs = points.map((point) => point.z);
+  return {
+    min: { x: Math.min(...xs) - margin, y: baseY, z: Math.min(...zs) - margin },
+    max: { x: Math.max(...xs) + margin, y: topY, z: Math.max(...zs) + margin },
+  };
+}
+
+function assertPathVolume(bounds: Bounds, segments: number): void {
+  const volume =
+    (bounds.max.x - bounds.min.x + 1) *
+    (bounds.max.y - bounds.min.y + 1) *
+    (bounds.max.z - bounds.min.z + 1);
+  if (volume > MAX_PATH_SCAN_VOLUME) {
+    throw new MinecraftBridgeError(
+      'shape-too-large',
+      `折線形狀的掃描體積 ${String(volume)}（× ${String(segments)} 段）超過上限 ${String(MAX_PATH_SCAN_VOLUME)}；請縮短路徑、降低高度或拆成多段。`,
+    );
+  }
+}
+
+/** 角度正規化到 [0, 2π)。 */
+function normalizeAngle(angle: number): number {
+  const full = Math.PI * 2;
+  return ((angle % full) + full) % full;
 }
 
 /** 點到線段的最短距離平方。線段退化成一點時就是點到點的距離。 */
@@ -645,7 +904,8 @@ export function generateShape(spec: ShapeSpec): Vec3[] {
     case 'cone': {
       const r = assertPositive(spec.radius, '圓錐底半徑', 128);
       const h = assertPositive(spec.height, '圓錐高度', 384);
-      const span = Math.ceil(r);
+      const top = assertNonNegative(spec.topRadius, '圓錐頂半徑', 128);
+      const span = Math.ceil(Math.max(r, top));
       const height = Math.round(h);
       const bounds = axialBounds(spec.center, spec.axis, span, height);
       const centerParts = axisComponents(spec.center, spec.axis);
@@ -653,7 +913,8 @@ export function generateShape(spec: ShapeSpec): Vec3[] {
         const parts = axisComponents({ x, y, z }, spec.axis);
         const level = parts.along - centerParts.along;
         if (level < 0 || level > height - 1) return false;
-        const scaled = r * (1 - level / height);
+        // top=0 時化簡回 r×(1−level/height)，與加 topRadius 之前逐格相同。
+        const scaled = r + (top - r) * (level / height);
         const limit = (scaled + 0.5) * (scaled + 0.5);
         const du = parts.u - centerParts.u;
         const dv = parts.v - centerParts.v;
@@ -665,9 +926,10 @@ export function generateShape(spec: ShapeSpec): Vec3[] {
     case 'pyramid': {
       const base = assertPositive(spec.baseRadius, '金字塔底半徑', 128);
       const h = assertPositive(spec.height, '金字塔高度', 384);
+      const top = assertNonNegative(spec.topRadius, '金字塔頂半徑', 128);
       const sides = assertSides(spec.sides);
       const normals = polygonNormals(sides, spec.rotation);
-      const span = polygonExtent(base, sides, spec.rotation);
+      const span = polygonExtent(Math.max(base, top), sides, spec.rotation);
       const height = Math.round(h);
       const bounds: Bounds = {
         min: { x: spec.center.x - span, y: spec.center.y, z: spec.center.z - span },
@@ -676,7 +938,7 @@ export function generateShape(spec: ShapeSpec): Vec3[] {
       const inside: InsideTest = (x, y, z) => {
         const level = y - spec.center.y;
         if (level < 0 || level > height - 1) return false;
-        const scaled = base * (1 - level / height);
+        const scaled = base + (top - base) * (level / height);
         return insidePolygon(x - spec.center.x, z - spec.center.z, scaled, normals);
       };
       return scanSolid(bounds, inside, spec.hollow, SIX_NEIGHBOURS);
@@ -1000,6 +1262,257 @@ export function generateShape(spec: ShapeSpec): Vec3[] {
         return insidePolygon(parts.u - centerParts.u, parts.v - centerParts.v, r, normals);
       };
       return scanSolid(bounds, inside, spec.hollow, SIX_NEIGHBOURS);
+    }
+
+    case 'polywall': {
+      const height = assertPositiveInteger(spec.height, '牆高', 384);
+      const thickness = assertPositiveInteger(spec.thickness, '牆厚', 32);
+      const merlonWidth = assertPositiveInteger(spec.merlonWidth, '城垛寬', 32);
+      const segments = buildPathSegments(spec.points, spec.closed);
+      const baseY = spec.points[0]!.y;
+      const reach = thickness / 2;
+      const margin = Math.ceil(reach) + 1;
+      const bounds = pathBounds(spec.points, margin, baseY, baseY + height - 1);
+      assertPathVolume(bounds, segments.length);
+
+      const topLevel = baseY + height - 1;
+      const inside: InsideTest = (x, y, z) => {
+        if (y < baseY || y > topLevel) return false;
+        const hit = nearestOnPath(x, z, segments);
+        if (hit.distance > reach) return false;
+        if (!spec.battlement || y !== topLevel) return true;
+        // 城垛：沿路徑每 merlonWidth 格交替留空。用累積長度而不是格數索引，
+        // 因為加厚之後同一格會對應到路徑上的一個區間，格數索引會不連續。
+        return Math.floor(hit.arcLength / merlonWidth) % 2 === 0;
+      };
+      return scanSolid(bounds, inside, false, SIX_NEIGHBOURS);
+    }
+
+    case 'ribbon': {
+      const width = assertPositive(spec.width, '帶寬', 64);
+      const thickness = assertPositiveInteger(spec.thickness, '厚度', 64);
+      const segments = buildPathSegments(spec.points, spec.closed);
+      const baseY = spec.points[0]!.y;
+      const reach = width / 2;
+      const margin = Math.ceil(reach) + 1;
+      const bounds = pathBounds(spec.points, margin, baseY, baseY + thickness - 1);
+      assertPathVolume(bounds, segments.length);
+
+      const inside: InsideTest = (x, y, z) => {
+        if (y < baseY || y > baseY + thickness - 1) return false;
+        return nearestOnPath(x, z, segments).distance <= reach;
+      };
+      return scanSolid(bounds, inside, false, SIX_NEIGHBOURS);
+    }
+
+    case 'heightfield': {
+      const minX = Math.min(spec.from.x, spec.to.x);
+      const maxX = Math.max(spec.from.x, spec.to.x);
+      const minZ = Math.min(spec.from.z, spec.to.z);
+      const maxZ = Math.max(spec.from.z, spec.to.z);
+      const baseY = Math.min(spec.from.y, spec.to.y);
+      const corners = spec.corners;
+      for (const [label, value] of [
+        ['西北角高度', corners.nw],
+        ['東北角高度', corners.ne],
+        ['西南角高度', corners.sw],
+        ['東南角高度', corners.se],
+      ] as const) {
+        assertNonNegative(value, label, 384);
+      }
+      const amplitude = spec.waves ? assertNonNegative(spec.waves.amplitude, '起伏振幅', 128) : 0;
+      const wavelength = spec.waves ? assertPositive(spec.waves.wavelength, '起伏波長', 512) : 1;
+
+      const spanX = maxX - minX;
+      const spanZ = maxZ - minZ;
+      // 高度上限＝四角最高再加上起伏的最大值；邊界盒要涵蓋得到，否則地表會被切平。
+      const peak = Math.max(corners.nw, corners.ne, corners.sw, corners.se) + amplitude;
+      const topY = baseY + Math.max(0, Math.round(peak) - 1);
+
+      const surfaceAt = (x: number, z: number): number => {
+        const tx = spanX === 0 ? 0 : (x - minX) / spanX;
+        const tz = spanZ === 0 ? 0 : (z - minZ) / spanZ;
+        const north = corners.nw + (corners.ne - corners.nw) * tx;
+        const south = corners.sw + (corners.se - corners.sw) * tx;
+        const bilinear = north + (south - north) * tz;
+        if (amplitude === 0) return bilinear;
+        const wave =
+          (Math.sin((x / wavelength) * Math.PI * 2) + Math.sin((z / wavelength) * Math.PI * 2)) / 2;
+        return bilinear + amplitude * wave;
+      };
+
+      const bounds: Bounds = {
+        min: { x: minX, y: baseY, z: minZ },
+        max: { x: maxX, y: topY, z: maxZ },
+      };
+      const inside: InsideTest = (x, y, z) => {
+        if (x < minX || x > maxX || z < minZ || z > maxZ) return false;
+        // corners 是「厚度幾格」而不是「表面在 base 上方幾格」：厚度 1 就該
+        // 只有一層。厚度不足 1 的地方直接沒有方塊，波浪因此能挖出窪地與水塘。
+        const thickness = Math.round(surfaceAt(x, z));
+        if (thickness < 1) return false;
+        const surface = baseY + thickness - 1;
+        if (y > surface || y < baseY) return false;
+        return spec.solid || y === surface;
+      };
+      return scanSolid(bounds, inside, false, SIX_NEIGHBOURS);
+    }
+
+    case 'spiralStairs': {
+      const outer = assertPositive(spec.radius, '螺旋梯外半徑', 128);
+      const innerRadius = assertNonNegative(spec.innerRadius, '螺旋梯內半徑', 128);
+      const height = assertPositiveInteger(spec.height, '螺旋梯高度', 384);
+      const turns = assertPositive(spec.turns, '圈數', 64);
+      const stepRise = assertPositiveInteger(spec.stepRise, '每階上升', 8);
+      if (innerRadius >= outer) {
+        throw new MinecraftBridgeError('invalid-shape', '螺旋梯的內半徑必須小於外半徑。');
+      }
+
+      const steps = Math.ceil(height / stepRise);
+      const span = Math.ceil(outer);
+      const outerLimit = (outer + 0.5) * (outer + 0.5);
+      const innerLimit = innerRadius <= 0 ? -1 : (innerRadius - 0.5) * (innerRadius - 0.5);
+      const direction = spec.clockwise ? -1 : 1;
+      const sweep = (Math.PI * 2 * turns) / steps;
+
+      const raw: Vec3[] = [];
+      for (let step = 0; step < steps; step += 1) {
+        const startAngle = direction * sweep * step;
+        for (let level = 0; level < stepRise; level += 1) {
+          const y = spec.center.y + step * stepRise + level;
+          if (y > spec.center.y + height - 1) break;
+          for (let dz = -span; dz <= span; dz += 1) {
+            for (let dx = -span; dx <= span; dx += 1) {
+              const distance = dx * dx + dz * dz;
+              if (distance > outerLimit || distance < innerLimit) continue;
+              if (dx === 0 && dz === 0) {
+                // 正中心的角度無定義；有中心柱需求時用 innerRadius 留洞，不在這裡猜。
+                if (innerRadius > 0) continue;
+                raw.push({ x: spec.center.x, y, z: spec.center.z });
+                continue;
+              }
+              const angle = Math.atan2(dz, dx);
+              const offset = normalizeAngle((angle - startAngle) * direction);
+              if (offset >= Math.abs(sweep)) continue;
+              raw.push({ x: spec.center.x + dx, y, z: spec.center.z + dz });
+            }
+          }
+        }
+      }
+      return dedupe(raw);
+    }
+
+    case 'cross': {
+      const reach = assertPositive(spec.radius, '十字臂長', 128);
+      const armWidth = assertPositiveInteger(spec.armWidth, '臂寬', 64);
+      const height = assertPositiveInteger(spec.height, '十字柱高度', 384);
+      const half = (armWidth - 1) / 2;
+      const span = Math.ceil(reach);
+      const bounds = axialBounds(spec.center, spec.axis, span, height);
+      const centerParts = axisComponents(spec.center, spec.axis);
+      const inside: InsideTest = (x, y, z) => {
+        const parts = axisComponents({ x, y, z }, spec.axis);
+        if (parts.along < centerParts.along || parts.along > centerParts.along + height - 1) {
+          return false;
+        }
+        const du = Math.abs(parts.u - centerParts.u);
+        const dv = Math.abs(parts.v - centerParts.v);
+        if (du > reach + 0.5 || dv > reach + 0.5) return false;
+        return du <= half + 0.5 || dv <= half + 0.5;
+      };
+      return scanSolid(bounds, inside, spec.hollow, SIX_NEIGHBOURS);
+    }
+
+    case 'star': {
+      const outer = assertPositive(spec.outerRadius, '星形外半徑', 128);
+      const inner = assertPositive(spec.innerRadius, '星形內半徑', 128);
+      const height = assertPositiveInteger(spec.height, '星形柱高度', 384);
+      if (!Number.isInteger(spec.points) || spec.points < 3 || spec.points > 12) {
+        throw new MinecraftBridgeError(
+          'invalid-shape',
+          '星形的角數必須是 3 到 12 的整數，實際收到：' + String(spec.points),
+        );
+      }
+      if (inner >= outer) {
+        throw new MinecraftBridgeError('invalid-shape', '星形的內半徑必須小於外半徑。');
+      }
+
+      const sectors = spec.points * 2;
+      const sectorAngle = (Math.PI * 2) / sectors;
+      const rotation = (spec.rotation * Math.PI) / 180;
+      const span = Math.ceil(outer);
+      const bounds = axialBounds(spec.center, spec.axis, span, height);
+      const centerParts = axisComponents(spec.center, spec.axis);
+
+      const inside: InsideTest = (x, y, z) => {
+        const parts = axisComponents({ x, y, z }, spec.axis);
+        if (parts.along < centerParts.along || parts.along > centerParts.along + height - 1) {
+          return false;
+        }
+        const du = parts.u - centerParts.u;
+        const dv = parts.v - centerParts.v;
+        const distance = Math.hypot(du, dv);
+        if (distance > outer + 0.5) return false;
+        if (distance <= inner) return true;
+        // 邊界半徑在相鄰內外頂點之間線性內插，所以星芒是直邊不是花瓣。
+        const position = normalizeAngle(Math.atan2(dv, du) - rotation) / sectorAngle;
+        const sector = Math.floor(position);
+        const ratio = position - sector;
+        const limit =
+          sector % 2 === 0 ? outer + (inner - outer) * ratio : inner + (outer - inner) * ratio;
+        return distance <= limit + 0.5;
+      };
+      return scanSolid(bounds, inside, spec.hollow, SIX_NEIGHBOURS);
+    }
+
+    case 'roof': {
+      const height = assertPositiveInteger(spec.height, '屋頂高度', 384);
+      const min = {
+        x: Math.min(spec.from.x, spec.to.x),
+        y: Math.min(spec.from.y, spec.to.y),
+        z: Math.min(spec.from.z, spec.to.z),
+      };
+      const max = {
+        x: Math.max(spec.from.x, spec.to.x),
+        y: Math.min(spec.from.y, spec.to.y) + height - 1,
+        z: Math.max(spec.from.z, spec.to.z),
+      };
+      if (spec.ridgeAxis === 'y') {
+        throw new MinecraftBridgeError('invalid-shape', '屋脊只能沿 x 或 z 延伸，不能是 y。');
+      }
+
+      const centerX = (min.x + max.x) / 2;
+      const centerZ = (min.z + max.z) / 2;
+      const halfX = (max.x - min.x) / 2;
+      const halfZ = (max.z - min.z) / 2;
+
+      /**
+       * 回傳這一格的屋面高度佔比：1 在屋脊、0 在屋簷。
+       *
+       * hip 用的是「離最近屋簷有多遠」的**絕對**距離，不是各軸各自正規化的
+       * 比例。差別很關鍵：各軸正規化會讓四面坡度不同、四邊同時收到頂，屋脊
+       * 退化成一個點；用絕對距離四面才是同一個坡度，屋脊才會是一條長度等於
+       * 「長邊減短邊」的線——那才是四坡屋頂的樣子。
+       */
+      const heightRatio = (x: number, z: number): number => {
+        const inwardX = halfX - Math.abs(x - centerX);
+        const inwardZ = halfZ - Math.abs(z - centerZ);
+        if (spec.style === 'gable') {
+          const inward = spec.ridgeAxis === 'x' ? inwardZ : inwardX;
+          const half = spec.ridgeAxis === 'x' ? halfZ : halfX;
+          return half === 0 ? 1 : inward / half;
+        }
+        const reach = Math.min(halfX, halfZ);
+        return reach === 0 ? 1 : Math.min(1, Math.min(inwardX, inwardZ) / reach);
+      };
+
+      const inside: InsideTest = (x, y, z) => {
+        if (x < min.x || x > max.x || z < min.z || z > max.z) return false;
+        const level = y - min.y;
+        if (level < 0 || level > height - 1) return false;
+        return level <= heightRatio(x, z) * (height - 1) + 1e-9;
+      };
+      return scanSolid({ min, max }, inside, spec.hollow, SIX_NEIGHBOURS);
     }
 
     default: {

@@ -1,6 +1,6 @@
 # BlockHand（積木之手）— Minecraft Education MCP
 
-讓 AI 在 Minecraft Education Edition 裡長出手腳：**動作**（Agent 走位、挖掘、放置、耕種、搬運）、**眼睛**（感測方塊、查詢座標、訂閱遊戲事件）、**造物**（十七種幾何形狀與逐格藍圖）。
+讓 AI 在 Minecraft Education Edition 裡長出手腳：**動作**（Agent 走位、挖掘、放置、耕種、搬運）、**眼睛**（感測方塊、查詢座標、訂閱遊戲事件）、**造物**（二十四種幾何形狀與逐格藍圖）。
 
 透過 Minecraft Education 官方文件化的 `/wsserver` 連線命令（`/connect` 是 alias）操作，不注入行程、不改遊戲檔案、不用畫面辨識。連線命令是官方介面；後續 WebSocket 訊息協定並沒有公開穩定性保證，因此遊戲改版後仍需重新驗證。
 
@@ -324,7 +324,7 @@ Agent 方向是**相對它自己的面向**，不是世界方位。
 | 工具 | 用途 |
 |---|---|
 | `mc_build_preview` | 只算不做：方塊數、邊界盒、fill 批次數 |
-| `mc_build_shape` | 十七種幾何形狀，多數支援 hollow（見下表） |
+| `mc_build_shape` | 二十四種幾何形狀，多數支援 hollow（見下表） |
 | `mc_blueprint_preview` | 逐格藍圖的預覽 |
 | `mc_build_blueprint` | 任意形狀：給「座標 → 方塊」清單，相同方塊自動合併 |
 
@@ -332,18 +332,41 @@ Agent 方向是**相對它自己的面向**，不是世界方位。
 
 | 群組 | 形狀 |
 |---|---|
-| 線與面 | `line`、`curve`（Catmull-Rom 平滑曲線，通過每個控制點）、`disk` |
-| 量體 | `box`、`sphere`、`ellipsoid`、`cylinder`、`cone`、`pyramid`、`prism`、`tube` |
-| 建築件 | `wedge`（斜面／屋頂）、`arch`（拱門／橋拱）、`stairs`（階梯） |
-| 曲面與環 | `torus`、`helix`、`revolution`（側面輪廓繞軸旋轉） |
+| 基本量體 | `box`、`sphere`、`ellipsoid`、`cylinder`、`cone`、`pyramid`、`prism` |
+| 線與面 | `line`、`curve`（平滑曲線）、`disk`、`tube`（任意方向圓柱） |
+| 建築件 | `wedge`（單斜面）、`roof`（人字／四坡屋頂）、`arch`（拱）、`stairs`、`spiralStairs`（螺旋梯）、`polywall`（折線牆／城牆） |
+| 地景與路徑 | `heightfield`（起伏地表）、`ribbon`（道路／橋面） |
+| 裝飾與造型 | `torus`、`helix`、`cross`（十字柱）、`star`（星形柱）、`revolution`（旋轉體） |
 
-幾個容易搞錯的語意：
+### 選型比語意更容易出錯
 
-- **`tube` 是 `cylinder` 的任意方向版**。cylinder 只能對齊 x／y／z，斜柱、樑、管線要用 tube；它以「點到線段的距離」判定，兩端是半球收尾。
-- **`prism` 是 `cylinder` 的邊數版**，`radius` 指中心到**邊**的距離（不是到頂點），所以邊數愈多就愈接近同半徑的 cylinder，`sides=4` 則與同尺寸的 box 逐格相同。`pyramid` 也吃同一個 `sides` 參數，預設 4 維持方底。
-- **`wedge` 的終點端剩一格高而不是收到零**，所以它是走得上去的坡道。人字屋頂＝兩個 `reversed` 相反的 wedge 對貼。
-- **`arch` 畫的是拱圈實體，中間的洞才是開口**，開口寬度為 2×radius−1；`legHeight` 把兩側直柱往下延伸成城門或橋墩。
-- **`revolution` 已經涵蓋整個旋轉對稱家族**——圓頂、花瓶、拋物面、冷卻塔都只是換一組 profile，不需要各自的形狀。例如 `profile: [{along:0,radius:8},{along:4,radius:3},{along:6,radius:5}]` 就是一只花瓶。
+形狀從 12 增到 24 的過程中，跨 AI 發想（grok／codex／agy，紀錄在 `agents/docs/ais/`）
+三家獨立指向同一個風險：**真正的瓶頸不是幾何寫不寫得出來，而是清單變長之後 AI 選錯形狀**。
+選錯不會報錯，只會蓋出一個看似合理但不是你要的東西。所以 `mc_build_shape` 的工具說明
+是按「想蓋什麼」分組的選型指引，而不是一張平的清單，並且把最容易互相搶市場的幾組寫成對照：
+
+| 你要的 | 用這個 | 不要用 |
+|---|---|---|
+| 斜的柱子、樑、管線 | `tube` | `cylinder`（只能對齊 x／y／z） |
+| 直角轉折的牆、圍牆 | `polywall` | `curve`（平滑曲線，會把直角磨圓） |
+| 有屋脊的屋頂 | `roof` | `wedge`（只有單面斜坡） |
+| 繞塔而上的樓梯 | `spiralStairs` | `helix`（沒有踏面）／`stairs`（走直線） |
+| 上下不等寬的塔身、基座、煙囪 | `cone`／`pyramid` 加 `topRadius` | 多層 `box` 疊 |
+| 圓頂、花瓶、拋物面、冷卻塔 | `revolution` 換一組 profile | 各自新增一個形狀 |
+| 一片起伏的地 | `heightfield` | 多個 `box` 拼 |
+
+幾個容易搞錯的參數語意：
+
+- **`prism`／`pyramid` 的 `radius` 是中心到「邊」的距離**（內切圓半徑），不是到頂點。所以邊數愈多就愈接近同半徑的 `cylinder`，而 `sides=4` 與同尺寸的 `box` 逐格相同。
+- **`cone` 與 `pyramid` 的 `topRadius` 是漸近值**：頂層實際會比它略寬半格左右。這是沿用 `cone` 原本的線性收斂公式（`topRadius=0` 時逐格等於加這個參數之前），沒有為了錐台去改動既有形狀的輸出。
+- **`roof` 的 `ridgeAxis` 是「屋脊延伸的方向」**，不是坡面朝向的方向——這兩個講法差 90 度，是這個形狀最容易填反的參數。
+- **`heightfield` 的 `corners` 是厚度（幾格）**，不是「表面在 `from.y` 上方幾格」。厚度 1 就只有一層；波浪把厚度壓到不足一格的地方直接沒有方塊，所以窪地與水塘是免費的。
+- **`wedge` 的終點端剩一格高而不是收到零**，所以它是走得上去的坡道。
+- **`arch` 畫的是拱圈實體，中間的洞才是開口**，開口寬度為 2×radius−1。
+
+合併效率有硬門檻：`tests/domain/fill-efficiency.test.ts` 針對每個形狀釘住
+「fill 條數 ÷ 方塊數」的上限。述詞寫得出來不代表產物適合這條管線——細碎、分支狀的
+形狀會讓 greedy 合併壓不下去，fill 條數逼近方塊數，教室現場的體感就是新功能反而更慢。
 
 ### 事件 — 感知（4）
 
@@ -425,7 +448,7 @@ src/
     coordinates.ts            絕對／相對／局部座標格式化與邊界檢查
     commands.ts               所有 slash 指令建構器 + 注入白名單
     command-policy.ts         raw 指令的結構性閘門
-    build/shapes.ts           十七種形狀；inside() + 外殼鄰居測試
+    build/shapes.ts           二十四種形狀；inside() + 外殼鄰居測試
     build/fill-planner.ts     三階段 greedy 合併 + 依上限拆批
   ports/minecraft-connection.ts   連線抽象；測試靠它塞假件
   adapters/ws-minecraft-connection.ts  WebSocket 監聽、requestId 對應、事件緩衝、重連重訂閱

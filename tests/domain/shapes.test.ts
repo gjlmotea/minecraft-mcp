@@ -116,6 +116,7 @@ describe('generateShape', () => {
       center: ORIGIN,
       radius: 8,
       height: 8,
+      topRadius: 0,
       axis: 'y',
       hollow: false,
     });
@@ -796,6 +797,7 @@ describe('pyramid 的邊數推廣', () => {
       center: ORIGIN,
       baseRadius: 5,
       height: 6,
+      topRadius: 0,
       sides: 4,
       rotation: 0,
       hollow: false,
@@ -813,6 +815,7 @@ describe('pyramid 的邊數推廣', () => {
       center: ORIGIN,
       baseRadius: 8,
       height: 8,
+      topRadius: 0,
       sides: 6,
       rotation: 0,
       hollow: false,
@@ -823,5 +826,545 @@ describe('pyramid 的邊數推廣', () => {
     for (let index = 1; index < levels.length; index += 1) {
       expect(perLevel.get(levels[index]!)!).toBeLessThanOrEqual(perLevel.get(levels[index - 1]!)!);
     }
+  });
+});
+
+/** 4-鄰接連通的格數。折線類形狀最典型的 bug 是轉角裂開，數量對不出這件事。 */
+function connectedCount(points: readonly { x: number; y: number; z: number }[]): number {
+  const all = new Set(points.map(keyOf));
+  const seen = new Set<string>([keyOf(points[0]!)]);
+  const queue = [points[0]!];
+  while (queue.length > 0) {
+    const current = queue.pop()!;
+    for (const [dx, dz] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const next = { x: current.x + dx, y: current.y, z: current.z + dz };
+      if (all.has(keyOf(next)) && !seen.has(keyOf(next))) {
+        seen.add(keyOf(next));
+        queue.push(next);
+      }
+    }
+  }
+  return seen.size;
+}
+
+/** 測試自己算一次點到 XZ 折線的距離，不共用實作。 */
+function distanceToPolylineXZ(
+  point: { x: number; z: number },
+  points: readonly { x: number; z: number }[],
+  closed: boolean,
+): number {
+  const ordered = closed ? [...points, points[0]!] : points;
+  let best = Infinity;
+  for (let index = 0; index < ordered.length - 1; index += 1) {
+    const a = ordered[index]!;
+    const b = ordered[index + 1]!;
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const lengthSquared = dx * dx + dz * dz;
+    let t = lengthSquared > 0 ? ((point.x - a.x) * dx + (point.z - a.z) * dz) / lengthSquared : 0;
+    t = Math.min(1, Math.max(0, t));
+    best = Math.min(best, Math.hypot(point.x - (a.x + dx * t), point.z - (a.z + dz * t)));
+  }
+  return best;
+}
+
+describe('polywall（折線牆）', () => {
+  const rectangle = [
+    { x: 0, y: 64, z: 0 },
+    { x: 20, y: 64, z: 0 },
+    { x: 20, y: 64, z: 20 },
+    { x: 0, y: 64, z: 20 },
+  ];
+  const base = { height: 4, thickness: 1, battlement: false, merlonWidth: 2 } as const;
+
+  it('轉角不會被磨圓——這正是 curve 做不到的事', () => {
+    const wall = generateShape({ kind: 'polywall', points: rectangle, closed: true, ...base });
+    for (const point of wall) {
+      expect(distanceToPolylineXZ(point, rectangle, true)).toBeLessThanOrEqual(0.5);
+    }
+    // 對照組：同樣四個點交給 curve，偏離會大得多。
+    const smoothed = generateShape({
+      kind: 'curve',
+      points: rectangle,
+      thickness: 1,
+      closed: true,
+    });
+    const worst = Math.max(
+      ...smoothed.map((point) => distanceToPolylineXZ(point, rectangle, true)),
+    );
+    expect(worst).toBeGreaterThan(2);
+  });
+
+  it('封閉時真的圍成完整一圈，沒有斷口', () => {
+    const wall = generateShape({
+      kind: 'polywall',
+      points: rectangle,
+      closed: true,
+      ...base,
+      height: 1,
+    });
+    expect(connectedCount(wall)).toBe(wall.length);
+  });
+
+  it('高度與厚度各自作用在不同軸上', () => {
+    const wall = generateShape({
+      kind: 'polywall',
+      points: [
+        { x: 0, y: 64, z: 0 },
+        { x: 10, y: 64, z: 0 },
+      ],
+      closed: false,
+      ...base,
+      height: 5,
+      thickness: 3,
+    });
+    expect(new Set(wall.map((point) => point.y)).size).toBe(5);
+    expect([...new Set(wall.map((point) => point.z))].sort((a, b) => a - b)).toEqual([-1, 0, 1]);
+  });
+
+  it('城垛只影響頂層，下面的牆身完好', () => {
+    const points = [
+      { x: 0, y: 64, z: 0 },
+      { x: 19, y: 64, z: 0 },
+    ];
+    const plain = generateShape({ kind: 'polywall', points, closed: false, ...base });
+    const merlons = generateShape({
+      kind: 'polywall',
+      points,
+      closed: false,
+      ...base,
+      battlement: true,
+    });
+    expect(merlons.length).toBeLessThan(plain.length);
+    const below = (shape: typeof plain) => shape.filter((point) => point.y < 67).length;
+    expect(below(merlons)).toBe(below(plain));
+    // merlonWidth=2 → 頂層兩格有、兩格沒有。
+    const top = merlons
+      .filter((point) => point.y === 67)
+      .map((point) => point.x)
+      .sort((left, right) => left - right);
+    expect(top.slice(0, 6)).toEqual([0, 1, 4, 5, 8, 9]);
+  });
+
+  it('點數不足或全部重疊會拒絕', () => {
+    expect(() =>
+      generateShape({ kind: 'polywall', points: [ORIGIN], closed: false, ...base }),
+    ).toThrow(MinecraftBridgeError);
+    expect(() =>
+      generateShape({ kind: 'polywall', points: [ORIGIN, ORIGIN], closed: false, ...base }),
+    ).toThrow(MinecraftBridgeError);
+  });
+
+  it('掃描體積過大會拒絕，而不是讓行程卡住', () => {
+    expect(() =>
+      generateShape({
+        kind: 'polywall',
+        points: [
+          { x: -400, y: 64, z: -400 },
+          { x: 400, y: 64, z: 400 },
+        ],
+        closed: false,
+        ...base,
+        height: 200,
+      }),
+    ).toThrow(MinecraftBridgeError);
+  });
+});
+
+describe('ribbon（路徑帶）', () => {
+  it('寬度往兩側攤開，厚度往上疊', () => {
+    const road = generateShape({
+      kind: 'ribbon',
+      points: [
+        { x: 0, y: 64, z: 0 },
+        { x: 10, y: 64, z: 0 },
+      ],
+      width: 3,
+      thickness: 2,
+      closed: false,
+    });
+    expect([...new Set(road.map((point) => point.z))].sort((a, b) => a - b)).toEqual([-1, 0, 1]);
+    expect([...new Set(road.map((point) => point.y))].sort((a, b) => a - b)).toEqual([64, 65]);
+  });
+
+  it('轉角是圓角接合，外側不會裂開', () => {
+    const bend = generateShape({
+      kind: 'ribbon',
+      points: [
+        { x: 0, y: 64, z: 0 },
+        { x: 10, y: 64, z: 0 },
+        { x: 10, y: 64, z: 10 },
+      ],
+      width: 5,
+      thickness: 1,
+      closed: false,
+    });
+    expect(connectedCount(bend)).toBe(bend.length);
+  });
+});
+
+describe('heightfield（高程地表）', () => {
+  const patch = { from: { x: 0, y: 64, z: 0 }, to: { x: 9, y: 64, z: 9 } } as const;
+
+  it('四角等高＝一塊平台，厚度就是格數不是「表面在上方幾格」', () => {
+    const flat = generateShape({
+      kind: 'heightfield',
+      ...patch,
+      corners: { nw: 1, ne: 1, sw: 1, se: 1 },
+      waves: null,
+      solid: true,
+    });
+    expect(flat).toHaveLength(100);
+    expect(new Set(flat.map((point) => point.y)).size).toBe(1);
+  });
+
+  it('四角不等高就內插成斜面', () => {
+    const slope = generateShape({
+      kind: 'heightfield',
+      ...patch,
+      corners: { nw: 1, ne: 5, sw: 1, se: 5 },
+      waves: null,
+      solid: true,
+    });
+    const column = (x: number) => slope.filter((point) => point.x === x && point.z === 0).length;
+    expect(column(0)).toBe(1);
+    expect(column(9)).toBe(5);
+    // 中間必須是單調不減的，否則就不是內插而是別的東西。
+    for (let x = 1; x <= 9; x += 1) expect(column(x)).toBeGreaterThanOrEqual(column(x - 1));
+  });
+
+  it('solid=false 只鋪一層地表皮', () => {
+    const skin = generateShape({
+      kind: 'heightfield',
+      ...patch,
+      corners: { nw: 4, ne: 4, sw: 4, se: 4 },
+      waves: null,
+      solid: false,
+    });
+    expect(skin).toHaveLength(100);
+  });
+
+  it('波浪會挖出窪地：厚度不足一格的地方沒有方塊', () => {
+    const dip = generateShape({
+      kind: 'heightfield',
+      from: { x: 0, y: 64, z: 0 },
+      to: { x: 19, y: 64, z: 19 },
+      corners: { nw: 2, ne: 2, sw: 2, se: 2 },
+      waves: { amplitude: 3, wavelength: 10 },
+      solid: true,
+    });
+    const columns = new Set(dip.map((point) => String(point.x) + ',' + String(point.z)));
+    expect(columns.size).toBeGreaterThan(0);
+    expect(columns.size).toBeLessThan(400);
+  });
+
+  it('同一組參數永遠得到同一塊地', () => {
+    const make = () =>
+      generateShape({
+        kind: 'heightfield',
+        ...patch,
+        corners: { nw: 1, ne: 4, sw: 2, se: 6 },
+        waves: { amplitude: 2, wavelength: 5 },
+        solid: true,
+      });
+    expect(make().map(keyOf)).toEqual(make().map(keyOf));
+  });
+});
+
+describe('spiralStairs（螺旋梯）', () => {
+  it('每一格高度都有踏面，走得上去', () => {
+    const stairs = generateShape({
+      kind: 'spiralStairs',
+      center: ORIGIN,
+      radius: 5,
+      innerRadius: 1,
+      height: 12,
+      turns: 2,
+      clockwise: true,
+      stepRise: 1,
+    });
+    expect(new Set(stairs.map((point) => point.y)).size).toBe(12);
+  });
+
+  it('順時鐘與逆時鐘不是同一組方塊', () => {
+    const make = (clockwise: boolean) =>
+      generateShape({
+        kind: 'spiralStairs',
+        center: ORIGIN,
+        radius: 5,
+        innerRadius: 0,
+        height: 4,
+        turns: 1,
+        clockwise,
+        stepRise: 1,
+      });
+    const forward = new Set(make(true).map(keyOf));
+    expect(make(false).every((point) => forward.has(keyOf(point)))).toBe(false);
+  });
+
+  it('innerRadius 會在中間留洞', () => {
+    const solid = generateShape({
+      kind: 'spiralStairs',
+      center: ORIGIN,
+      radius: 6,
+      innerRadius: 0,
+      height: 4,
+      turns: 1,
+      clockwise: true,
+      stepRise: 1,
+    });
+    const holed = generateShape({
+      kind: 'spiralStairs',
+      center: ORIGIN,
+      radius: 6,
+      innerRadius: 3,
+      height: 4,
+      turns: 1,
+      clockwise: true,
+      stepRise: 1,
+    });
+    expect(holed.length).toBeLessThan(solid.length);
+    expect(holed.some((point) => point.x === ORIGIN.x && point.z === ORIGIN.z)).toBe(false);
+  });
+
+  it('內半徑不小於外半徑會拒絕', () => {
+    expect(() =>
+      generateShape({
+        kind: 'spiralStairs',
+        center: ORIGIN,
+        radius: 3,
+        innerRadius: 3,
+        height: 4,
+        turns: 1,
+        clockwise: true,
+        stepRise: 1,
+      }),
+    ).toThrow(MinecraftBridgeError);
+  });
+});
+
+describe('cross（十字柱）', () => {
+  it('兩條臂交錯，中間不重複計算', () => {
+    const cross = generateShape({
+      kind: 'cross',
+      center: ORIGIN,
+      radius: 5,
+      armWidth: 3,
+      height: 1,
+      axis: 'y',
+      hollow: false,
+    });
+    // 11×3 兩條臂，扣掉重疊的 3×3。
+    expect(cross).toHaveLength(11 * 3 * 2 - 3 * 3);
+  });
+
+  it('臂端之外沒有東西', () => {
+    const cross = generateShape({
+      kind: 'cross',
+      center: ORIGIN,
+      radius: 4,
+      armWidth: 1,
+      height: 1,
+      axis: 'y',
+      hollow: false,
+    });
+    for (const point of cross) {
+      expect(Math.abs(point.x - ORIGIN.x)).toBeLessThanOrEqual(4);
+      expect(Math.abs(point.z - ORIGIN.z)).toBeLessThanOrEqual(4);
+    }
+  });
+});
+
+describe('star（星形柱）', () => {
+  it('比同外半徑的圓盤少很多——凹處真的凹進去了', () => {
+    const star = generateShape({
+      kind: 'star',
+      center: ORIGIN,
+      points: 5,
+      outerRadius: 8,
+      innerRadius: 3,
+      height: 1,
+      rotation: 0,
+      axis: 'y',
+      hollow: false,
+    });
+    const disk = generateShape({ kind: 'disk', center: ORIGIN, radius: 8, axis: 'y', hollow: false });
+    expect(star.length).toBeLessThan(disk.length * 0.7);
+  });
+
+  it('內半徑以內一定是實心的', () => {
+    const star = generateShape({
+      kind: 'star',
+      center: ORIGIN,
+      points: 6,
+      outerRadius: 10,
+      innerRadius: 4,
+      height: 1,
+      rotation: 0,
+      axis: 'y',
+      hollow: false,
+    });
+    const filled = new Set(star.map(keyOf));
+    for (let dz = -3; dz <= 3; dz += 1) {
+      for (let dx = -3; dx <= 3; dx += 1) {
+        if (Math.hypot(dx, dz) > 3) continue;
+        expect(filled.has(keyOf({ x: ORIGIN.x + dx, y: ORIGIN.y, z: ORIGIN.z + dz }))).toBe(true);
+      }
+    }
+  });
+
+  it('內半徑不小於外半徑、角數超出範圍都會拒絕', () => {
+    const make = (points: number, innerRadius: number) => () =>
+      generateShape({
+        kind: 'star',
+        center: ORIGIN,
+        points,
+        outerRadius: 5,
+        innerRadius,
+        height: 1,
+        rotation: 0,
+        axis: 'y',
+        hollow: false,
+      });
+    expect(make(5, 5)).toThrow(MinecraftBridgeError);
+    expect(make(2, 2)).toThrow(MinecraftBridgeError);
+    expect(make(13, 2)).toThrow(MinecraftBridgeError);
+  });
+});
+
+describe('roof（屋頂）', () => {
+  const footprint = { from: { x: 0, y: 64, z: 0 }, to: { x: 10, y: 64, z: 8 } } as const;
+
+  it('gable 的屋脊沿 ridgeAxis 延伸整條，不是垂直於它', () => {
+    const roof = generateShape({
+      kind: 'roof',
+      ...footprint,
+      height: 5,
+      style: 'gable',
+      ridgeAxis: 'x',
+      hollow: false,
+    });
+    const ridge = roof.filter((point) => point.y === 68);
+    expect(ridge).toHaveLength(11);
+    expect(new Set(ridge.map((point) => point.z))).toEqual(new Set([4]));
+  });
+
+  /**
+   * 這條是四坡屋頂的成敗關鍵。若四個方向各自用自己的半跨距正規化，四邊會同時
+   * 收到頂、屋脊退化成一個點——看起來像金字塔而不是屋頂，而且方塊數只差一點點，
+   * 光看數量抓不出來。
+   */
+  it('hip 的屋脊是一條線，長度等於長邊減短邊加一', () => {
+    for (const [spanX, spanZ] of [
+      [10, 8],
+      [14, 6],
+    ] as const) {
+      const roof = generateShape({
+        kind: 'roof',
+        from: { x: 0, y: 64, z: 0 },
+        to: { x: spanX, y: 64, z: spanZ },
+        height: 5,
+        style: 'hip',
+        ridgeAxis: 'x',
+        hollow: false,
+      });
+      const ridge = roof.filter((point) => point.y === 68);
+      expect(ridge).toHaveLength(spanX - spanZ + 1);
+      expect(new Set(ridge.map((point) => point.z)).size).toBe(1);
+    }
+  });
+
+  it('正方形底面的 hip 會收成一點，這是它該有的樣子', () => {
+    const roof = generateShape({
+      kind: 'roof',
+      from: { x: 0, y: 64, z: 0 },
+      to: { x: 8, y: 64, z: 8 },
+      height: 5,
+      style: 'hip',
+      ridgeAxis: 'x',
+      hollow: false,
+    });
+    expect(roof.filter((point) => point.y === 68)).toHaveLength(1);
+  });
+
+  it('hip 四面都落下，所以比同尺寸的 gable 少方塊', () => {
+    const make = (style: 'gable' | 'hip') =>
+      generateShape({ kind: 'roof', ...footprint, height: 5, style, ridgeAxis: 'x', hollow: false })
+        .length;
+    expect(make('hip')).toBeLessThan(make('gable'));
+  });
+
+  it('屋脊不能沿 y', () => {
+    expect(() =>
+      generateShape({
+        kind: 'roof',
+        ...footprint,
+        height: 5,
+        style: 'gable',
+        ridgeAxis: 'y',
+        hollow: false,
+      }),
+    ).toThrow(MinecraftBridgeError);
+  });
+});
+
+describe('錐台（cone／pyramid 的 topRadius）', () => {
+  it('topRadius=0 與加這個參數之前逐格相同', () => {
+    const cone = generateShape({
+      kind: 'cone',
+      center: ORIGIN,
+      radius: 6,
+      height: 6,
+      topRadius: 0,
+      axis: 'y',
+      hollow: false,
+    });
+    // 舊行為：每一層的半徑是 r×(1−level/height)，頂層最小。
+    const perLevel = new Map<number, number>();
+    for (const point of cone) perLevel.set(point.y, (perLevel.get(point.y) ?? 0) + 1);
+    const levels = [...perLevel.keys()].sort((left, right) => left - right);
+    for (let index = 1; index < levels.length; index += 1) {
+      expect(perLevel.get(levels[index]!)!).toBeLessThan(perLevel.get(levels[index - 1]!)!);
+    }
+  });
+
+  it('topRadius 大於 0 就是錐台，頂層明顯比尖點寬', () => {
+    const make = (topRadius: number) =>
+      generateShape({
+        kind: 'cone',
+        center: ORIGIN,
+        radius: 8,
+        height: 8,
+        topRadius,
+        axis: 'y',
+        hollow: false,
+      });
+    const point = make(0).filter((cell) => cell.y === ORIGIN.y + 7).length;
+    const flat = make(4).filter((cell) => cell.y === ORIGIN.y + 7).length;
+    expect(flat).toBeGreaterThan(point * 4);
+  });
+
+  /**
+   * 這條擋的是浮點削角：Math.cos(Math.PI / 2) 不是 0，limit 剛好落在整數上時
+   * 正方形的角落會被靜靜削掉。topRadius 的線性內插很容易產生半整數半徑，
+   * 所以這個 bug 是加錐台之後才會現形的。
+   */
+  it('方錐台的頂面是完整的正方形，角落不會被浮點雜訊削掉', () => {
+    const frustum = generateShape({
+      kind: 'pyramid',
+      center: ORIGIN,
+      baseRadius: 8,
+      height: 8,
+      topRadius: 4,
+      sides: 4,
+      rotation: 0,
+      hollow: false,
+    });
+    expect(frustum.filter((point) => point.y === ORIGIN.y + 7)).toHaveLength(11 * 11);
   });
 });
