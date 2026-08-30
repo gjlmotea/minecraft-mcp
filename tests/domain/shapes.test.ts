@@ -5,6 +5,27 @@ import { generateShape } from '../../src/domain/build/shapes.js';
 
 const ORIGIN = { x: 0, y: 64, z: 0 };
 
+const keyOf = (point: { x: number; y: number; z: number }): string =>
+  `${String(point.x)},${String(point.y)},${String(point.z)}`;
+
+/** 測試自己算一次點到線段的距離，不共用實作，否則等於拿 bug 驗 bug。 */
+function distanceToSegment(
+  point: { x: number; y: number; z: number },
+  from: { x: number; y: number; z: number },
+  to: { x: number; y: number; z: number },
+): number {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dz = to.z - from.z;
+  const lengthSquared = dx * dx + dy * dy + dz * dz;
+  let t = 0;
+  if (lengthSquared > 0) {
+    t = ((point.x - from.x) * dx + (point.y - from.y) * dy + (point.z - from.z) * dz) / lengthSquared;
+    t = Math.min(1, Math.max(0, t));
+  }
+  return Math.hypot(point.x - (from.x + dx * t), point.y - (from.y + dy * t), point.z - (from.z + dz * t));
+}
+
 describe('generateShape', () => {
   it('line 連接兩點且首尾正確', () => {
     const points = generateShape({
@@ -385,5 +406,422 @@ describe('generateShape：revolution', () => {
         ],
       }),
     ).toThrow(MinecraftBridgeError);
+  });
+});
+
+/**
+ * 以下五個形狀是第二批加入的。測試重點放在「新形狀沒有偷改舊形狀」與
+ * 「參數的語意真的是說明寫的那個意思」——尺寸類的 bug 在遊戲裡看得出來，
+ * 語意類的 bug 看不出來，只會蓋出一個看似合理但不是你要的東西。
+ */
+describe('tube（任意方向圓柱）', () => {
+  it('兩端點相同時等於同半徑的球，逐格相同', () => {
+    const tube = generateShape({ kind: 'tube', from: ORIGIN, to: ORIGIN, radius: 3, hollow: false });
+    const sphere = generateShape({ kind: 'sphere', center: ORIGIN, radius: 3, hollow: false });
+    expect(new Set(tube.map(keyOf))).toEqual(new Set(sphere.map(keyOf)));
+  });
+
+  it('每一格都在半徑內，斜向也成立', () => {
+    const from = { x: 0, y: 64, z: 0 };
+    const to = { x: 10, y: 74, z: 10 };
+    const radius = 2;
+    const points = generateShape({ kind: 'tube', from, to, radius, hollow: false });
+    expect(points.length).toBeGreaterThan(0);
+    for (const point of points) {
+      expect(distanceToSegment(point, from, to)).toBeLessThanOrEqual(radius + 0.5 + 1e-9);
+    }
+  });
+
+  it('比同半徑同長度的 cylinder 多，因為兩端是半球不是切平', () => {
+    const tube = generateShape({
+      kind: 'tube',
+      from: { x: 0, y: 64, z: 0 },
+      to: { x: 0, y: 70, z: 0 },
+      radius: 3,
+      hollow: false,
+    });
+    const cylinder = generateShape({
+      kind: 'cylinder',
+      center: { x: 0, y: 64, z: 0 },
+      radius: 3,
+      height: 7,
+      axis: 'y',
+      hollow: false,
+    });
+    expect(tube.length).toBeGreaterThan(cylinder.length);
+  });
+
+  it('空心是封閉殼層：兩端的蓋子也在，管子不是通的', () => {
+    const from = { x: 0, y: 64, z: 0 };
+    const to = { x: 0, y: 74, z: 0 };
+    const hollow = generateShape({ kind: 'tube', from, to, radius: 4, hollow: true });
+    const solid = generateShape({ kind: 'tube', from, to, radius: 4, hollow: false });
+    expect(hollow.length).toBeLessThan(solid.length);
+    // 端點正上方的蓋子必須留著，否則就成了開口的管。
+    expect(hollow.some((point) => point.x === 0 && point.z === 0 && point.y === to.y + 4)).toBe(true);
+    // 中段的軸心是內部，應該被挖掉。
+    expect(hollow.some((point) => point.x === 0 && point.z === 0 && point.y === 69)).toBe(false);
+  });
+
+  it('半徑非正數會拒絕', () => {
+    expect(() =>
+      generateShape({ kind: 'tube', from: ORIGIN, to: ORIGIN, radius: 0, hollow: false }),
+    ).toThrow(MinecraftBridgeError);
+  });
+});
+
+describe('wedge（楔形斜面）', () => {
+  const from = { x: 0, y: 64, z: 0 };
+  const to = { x: 4, y: 68, z: 0 };
+
+  it('起點端滿高、終點端剩一格，總數是等差級數', () => {
+    const points = generateShape({
+      kind: 'wedge',
+      from,
+      to,
+      rise: 'y',
+      run: 'x',
+      reversed: false,
+      hollow: false,
+    });
+    // 5+4+3+2+1
+    expect(points).toHaveLength(15);
+    expect(points.filter((point) => point.x === 0)).toHaveLength(5);
+    expect(points.filter((point) => point.x === 4)).toHaveLength(1);
+  });
+
+  it('reversed 把高的那一端換到另一邊', () => {
+    const points = generateShape({
+      kind: 'wedge',
+      from,
+      to,
+      rise: 'y',
+      run: 'x',
+      reversed: true,
+      hollow: false,
+    });
+    expect(points).toHaveLength(15);
+    expect(points.filter((point) => point.x === 4)).toHaveLength(5);
+    expect(points.filter((point) => point.x === 0)).toHaveLength(1);
+  });
+
+  it('斜面上的整數格不會因為浮點誤差被判在外面', () => {
+    const points = generateShape({
+      kind: 'wedge',
+      from: { x: 0, y: 64, z: 0 },
+      to: { x: 6, y: 70, z: 0 },
+      rise: 'y',
+      run: 'x',
+      reversed: false,
+      hollow: false,
+    });
+    // 斜率剛好 1，(x, 64 + 6 - x) 這條稜線每一格都該在。
+    for (let step = 0; step <= 6; step += 1) {
+      expect(points.some((point) => point.x === step && point.y === 64 + 6 - step)).toBe(true);
+    }
+  });
+
+  it('上升與下降不能是同一個軸', () => {
+    expect(() =>
+      generateShape({ kind: 'wedge', from, to, rise: 'y', run: 'y', reversed: false, hollow: false }),
+    ).toThrow(MinecraftBridgeError);
+  });
+});
+
+describe('arch（半圓拱）', () => {
+  it('開口寬度是 2×radius−1，拱圈厚度就是 thickness', () => {
+    const points = generateShape({
+      kind: 'arch',
+      center: ORIGIN,
+      radius: 5,
+      thickness: 2,
+      depth: 1,
+      span: 'x',
+      rise: 'y',
+      legHeight: 0,
+    });
+    const springing = points
+      .filter((point) => point.y === ORIGIN.y)
+      .map((point) => point.x)
+      .sort((left, right) => left - right);
+    expect(springing).toEqual([-6, -5, 5, 6]);
+    // 起拱線上 x=-4..4 共 9 格是開口，2×5−1。
+    expect(springing.filter((x) => Math.abs(x) < 5)).toHaveLength(0);
+  });
+
+  it('拱腳的寬度與拱圈在起拱線的落點完全對齊', () => {
+    const points = generateShape({
+      kind: 'arch',
+      center: ORIGIN,
+      radius: 5,
+      thickness: 2,
+      depth: 1,
+      span: 'x',
+      rise: 'y',
+      legHeight: 4,
+    });
+    const at = (y: number) =>
+      points
+        .filter((point) => point.y === y)
+        .map((point) => point.x)
+        .sort((left, right) => left - right);
+    expect(at(ORIGIN.y - 4)).toEqual(at(ORIGIN.y));
+    // 再往下一格就沒有了。
+    expect(at(ORIGIN.y - 5)).toEqual([]);
+  });
+
+  it('半整數半徑也對齊——拱圈與拱腳必須用同一個內緣判定', () => {
+    // 整數半徑下「>= radius」與「>= radius - 0.5」在整數格上結果相同，
+    // 抓不到用錯內緣的實作；半整數半徑才會把兩者分開。
+    const points = generateShape({
+      kind: 'arch',
+      center: ORIGIN,
+      radius: 5.5,
+      thickness: 2,
+      depth: 1,
+      span: 'x',
+      rise: 'y',
+      legHeight: 3,
+    });
+    const at = (y: number) =>
+      points
+        .filter((point) => point.y === y)
+        .map((point) => point.x)
+        .sort((left, right) => left - right);
+    expect(at(ORIGIN.y)).toContain(5);
+    expect(at(ORIGIN.y - 3)).toEqual(at(ORIGIN.y));
+  });
+
+  it('depth 是沿第三軸的進深，每一層都一樣', () => {
+    const points = generateShape({
+      kind: 'arch',
+      center: ORIGIN,
+      radius: 4,
+      thickness: 1,
+      depth: 3,
+      span: 'x',
+      rise: 'y',
+      legHeight: 0,
+    });
+    const layers = new Map<number, number>();
+    for (const point of points) layers.set(point.z, (layers.get(point.z) ?? 0) + 1);
+    expect([...layers.keys()].sort((left, right) => left - right)).toEqual([0, 1, 2]);
+    expect(new Set(layers.values()).size).toBe(1);
+  });
+
+  it('三個軸向組合都能擺，方塊數一致', () => {
+    const counts = (['x', 'z'] as const).map(
+      (span) =>
+        generateShape({
+          kind: 'arch',
+          center: ORIGIN,
+          radius: 4,
+          thickness: 1,
+          depth: 2,
+          span,
+          rise: 'y',
+          legHeight: 2,
+        }).length,
+    );
+    expect(new Set(counts).size).toBe(1);
+  });
+
+  it('跨距與上升不能是同一個軸', () => {
+    expect(() =>
+      generateShape({
+        kind: 'arch',
+        center: ORIGIN,
+        radius: 4,
+        thickness: 1,
+        depth: 1,
+        span: 'y',
+        rise: 'y',
+        legHeight: 0,
+      }),
+    ).toThrow(MinecraftBridgeError);
+  });
+});
+
+describe('stairs（階梯）', () => {
+  it('懸空踏板每階只有一格，實心會補滿到起點高度', () => {
+    const base = {
+      kind: 'stairs',
+      from: ORIGIN,
+      direction: 'x+',
+      steps: 4,
+      width: 1,
+      stepRise: 1,
+      stepRun: 1,
+    } as const;
+    expect(generateShape({ ...base, solid: false })).toHaveLength(4);
+    // 1+2+3+4
+    expect(generateShape({ ...base, solid: true })).toHaveLength(10);
+  });
+
+  it('每階的高度與前進距離照著 stepRise／stepRun 走', () => {
+    const points = generateShape({
+      kind: 'stairs',
+      from: ORIGIN,
+      direction: 'x+',
+      steps: 3,
+      width: 2,
+      stepRise: 2,
+      stepRun: 2,
+      solid: false,
+    });
+    expect(points).toHaveLength(3 * 2 * 2 * 2);
+    // 第 3 階（index 2）的踏面頂端在 y+5，起點在 x+4。
+    expect(points.some((point) => point.x === 4 && point.y === ORIGIN.y + 5)).toBe(true);
+    expect(points.every((point) => point.x <= 5)).toBe(true);
+  });
+
+  it('負方向真的往負座標走', () => {
+    const points = generateShape({
+      kind: 'stairs',
+      from: ORIGIN,
+      direction: 'z-',
+      steps: 3,
+      width: 1,
+      stepRise: 1,
+      stepRun: 1,
+      solid: false,
+    });
+    expect(Math.min(...points.map((point) => point.z))).toBe(ORIGIN.z - 2);
+    expect(Math.max(...points.map((point) => point.z))).toBe(ORIGIN.z);
+  });
+
+  it('階數不是正整數會拒絕', () => {
+    expect(() =>
+      generateShape({
+        kind: 'stairs',
+        from: ORIGIN,
+        direction: 'x+',
+        steps: 0,
+        width: 1,
+        stepRise: 1,
+        stepRun: 1,
+        solid: false,
+      }),
+    ).toThrow(MinecraftBridgeError);
+  });
+});
+
+describe('prism（正 n 角柱）', () => {
+  it('sides=4 rotation=0 與同尺寸的 box 逐格相同', () => {
+    const prism = generateShape({
+      kind: 'prism',
+      center: ORIGIN,
+      radius: 5,
+      height: 3,
+      sides: 4,
+      rotation: 0,
+      axis: 'y',
+      hollow: false,
+    });
+    const box = generateShape({
+      kind: 'box',
+      from: { x: ORIGIN.x - 5, y: ORIGIN.y, z: ORIGIN.z - 5 },
+      to: { x: ORIGIN.x + 5, y: ORIGIN.y + 2, z: ORIGIN.z + 5 },
+      hollow: false,
+    });
+    expect(new Set(prism.map(keyOf))).toEqual(new Set(box.map(keyOf)));
+  });
+
+  it('邊數愈多愈接近同半徑的 cylinder', () => {
+    const cylinder = generateShape({
+      kind: 'cylinder',
+      center: ORIGIN,
+      radius: 8,
+      height: 1,
+      axis: 'y',
+      hollow: false,
+    }).length;
+    const gap = (sides: number) =>
+      Math.abs(
+        generateShape({
+          kind: 'prism',
+          center: ORIGIN,
+          radius: 8,
+          height: 1,
+          sides,
+          rotation: 0,
+          axis: 'y',
+          hollow: false,
+        }).length - cylinder,
+      );
+    expect(gap(12)).toBeLessThan(gap(3));
+  });
+
+  it('rotation 會轉出不同的一組方塊，但數量不變', () => {
+    const make = (rotation: number) =>
+      generateShape({
+        kind: 'prism',
+        center: ORIGIN,
+        radius: 6,
+        height: 1,
+        sides: 6,
+        rotation,
+        axis: 'y',
+        hollow: false,
+      });
+    const upright = make(0);
+    const turned = make(30);
+    expect(turned).toHaveLength(upright.length);
+    const before = new Set(upright.map(keyOf));
+    expect(turned.every((point) => before.has(keyOf(point)))).toBe(false);
+  });
+
+  it('邊數超出 3–12 會拒絕', () => {
+    for (const sides of [2, 13, 6.5]) {
+      expect(() =>
+        generateShape({
+          kind: 'prism',
+          center: ORIGIN,
+          radius: 5,
+          height: 5,
+          sides,
+          rotation: 0,
+          axis: 'y',
+          hollow: false,
+        }),
+      ).toThrow(MinecraftBridgeError);
+    }
+  });
+});
+
+describe('pyramid 的邊數推廣', () => {
+  it('sides=4 rotation=0 的每一層都是正方形，維持舊行為', () => {
+    const points = generateShape({
+      kind: 'pyramid',
+      center: ORIGIN,
+      baseRadius: 5,
+      height: 6,
+      sides: 4,
+      rotation: 0,
+      hollow: false,
+    });
+    const bottom = points.filter((point) => point.y === ORIGIN.y);
+    expect(bottom).toHaveLength(11 * 11);
+    const top = points.filter((point) => point.y === ORIGIN.y + 5);
+    expect(top.length).toBeGreaterThan(0);
+    expect(top.length).toBeLessThan(bottom.length);
+  });
+
+  it('每一層都比下面一層小或相等，收成尖的', () => {
+    const points = generateShape({
+      kind: 'pyramid',
+      center: ORIGIN,
+      baseRadius: 8,
+      height: 8,
+      sides: 6,
+      rotation: 0,
+      hollow: false,
+    });
+    const perLevel = new Map<number, number>();
+    for (const point of points) perLevel.set(point.y, (perLevel.get(point.y) ?? 0) + 1);
+    const levels = [...perLevel.keys()].sort((left, right) => left - right);
+    for (let index = 1; index < levels.length; index += 1) {
+      expect(perLevel.get(levels[index]!)!).toBeLessThanOrEqual(perLevel.get(levels[index - 1]!)!);
+    }
   });
 });

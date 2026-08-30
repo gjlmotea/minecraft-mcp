@@ -1,6 +1,6 @@
 # BlockHand（積木之手）— Minecraft Education MCP
 
-讓 AI 在 Minecraft Education Edition 裡長出手腳：**動作**（Agent 走位、挖掘、放置、耕種、搬運）、**眼睛**（感測方塊、查詢座標、訂閱遊戲事件）、**造物**（十種幾何形狀與逐格藍圖）。
+讓 AI 在 Minecraft Education Edition 裡長出手腳：**動作**（Agent 走位、挖掘、放置、耕種、搬運）、**眼睛**（感測方塊、查詢座標、訂閱遊戲事件）、**造物**（十七種幾何形狀與逐格藍圖）。
 
 透過 Minecraft Education 官方文件化的 `/wsserver` 連線命令（`/connect` 是 alias）操作，不注入行程、不改遊戲檔案、不用畫面辨識。連線命令是官方介面；後續 WebSocket 訊息協定並沒有公開穩定性保證，因此遊戲改版後仍需重新驗證。
 
@@ -324,9 +324,26 @@ Agent 方向是**相對它自己的面向**，不是世界方位。
 | 工具 | 用途 |
 |---|---|
 | `mc_build_preview` | 只算不做：方塊數、邊界盒、fill 批次數 |
-| `mc_build_shape` | line／box／sphere／ellipsoid／cylinder／cone／pyramid／disk／torus／helix／curve／revolution，多數支援 hollow |
+| `mc_build_shape` | 十七種幾何形狀，多數支援 hollow（見下表） |
 | `mc_blueprint_preview` | 逐格藍圖的預覽 |
 | `mc_build_blueprint` | 任意形狀：給「座標 → 方塊」清單，相同方塊自動合併 |
+
+`mc_build_shape` 的形狀清單：
+
+| 群組 | 形狀 |
+|---|---|
+| 線與面 | `line`、`curve`（Catmull-Rom 平滑曲線，通過每個控制點）、`disk` |
+| 量體 | `box`、`sphere`、`ellipsoid`、`cylinder`、`cone`、`pyramid`、`prism`、`tube` |
+| 建築件 | `wedge`（斜面／屋頂）、`arch`（拱門／橋拱）、`stairs`（階梯） |
+| 曲面與環 | `torus`、`helix`、`revolution`（側面輪廓繞軸旋轉） |
+
+幾個容易搞錯的語意：
+
+- **`tube` 是 `cylinder` 的任意方向版**。cylinder 只能對齊 x／y／z，斜柱、樑、管線要用 tube；它以「點到線段的距離」判定，兩端是半球收尾。
+- **`prism` 是 `cylinder` 的邊數版**，`radius` 指中心到**邊**的距離（不是到頂點），所以邊數愈多就愈接近同半徑的 cylinder，`sides=4` 則與同尺寸的 box 逐格相同。`pyramid` 也吃同一個 `sides` 參數，預設 4 維持方底。
+- **`wedge` 的終點端剩一格高而不是收到零**，所以它是走得上去的坡道。人字屋頂＝兩個 `reversed` 相反的 wedge 對貼。
+- **`arch` 畫的是拱圈實體，中間的洞才是開口**，開口寬度為 2×radius−1；`legHeight` 把兩側直柱往下延伸成城門或橋墩。
+- **`revolution` 已經涵蓋整個旋轉對稱家族**——圓頂、花瓶、拋物面、冷卻塔都只是換一組 profile，不需要各自的形狀。例如 `profile: [{along:0,radius:8},{along:4,radius:3},{along:6,radius:5}]` 就是一只花瓶。
 
 ### 事件 — 感知（4）
 
@@ -408,7 +425,7 @@ src/
     coordinates.ts            絕對／相對／局部座標格式化與邊界檢查
     commands.ts               所有 slash 指令建構器 + 注入白名單
     command-policy.ts         raw 指令的結構性閘門
-    build/shapes.ts           十種形狀；inside() + 外殼鄰居測試
+    build/shapes.ts           十七種形狀；inside() + 外殼鄰居測試
     build/fill-planner.ts     三階段 greedy 合併 + 依上限拆批
   ports/minecraft-connection.ts   連線抽象；測試靠它塞假件
   adapters/ws-minecraft-connection.ts  WebSocket 監聽、requestId 對應、事件緩衝、重連重訂閱

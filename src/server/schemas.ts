@@ -7,7 +7,7 @@ import {
   FILL_MODES,
   TURN_DIRECTIONS,
 } from '../domain/contracts.js';
-import { AXES } from '../domain/build/shapes.js';
+import { AXES, STAIR_DIRECTIONS } from '../domain/build/shapes.js';
 
 /*
  * 為什麼這裡每個共用片段都是 function 而不是 const？
@@ -186,8 +186,14 @@ export const shapeSchema = () =>
       .object({
         kind: z.literal('pyramid'),
         center: vec3Schema(),
-        baseRadius: z.number().min(1).max(128),
+        baseRadius: z
+          .number()
+          .min(1)
+          .max(128)
+          .describe('底面中心到「邊」的距離，不是到頂點；底邊長 = 2×baseRadius+1'),
         height: z.number().int().min(1).max(384),
+        sides: z.number().int().min(3).max(12).default(4).describe('4 是傳統方底，3 三角錐，6 六角錐'),
+        rotation: z.number().min(-360).max(360).default(0).describe('底面繞 Y 軸轉幾度'),
         hollow: z.boolean().default(false),
       })
       .strict(),
@@ -250,6 +256,84 @@ export const shapeSchema = () =>
           .max(64)
           .describe('側面輪廓；半徑在相鄰點之間線性內插，可蓋花瓶、塔樓、圓頂'),
         hollow: z.boolean().default(false).describe('true 只留側面殼層'),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('tube'),
+        from: vec3Schema(),
+        to: vec3Schema(),
+        radius: z
+          .number()
+          .min(0.5)
+          .max(64)
+          .describe('cylinder 的任意方向版；兩端是半球收尾'),
+        hollow: z
+          .boolean()
+          .default(false)
+          .describe('封閉殼層，兩端的半球蓋也算殼，所以不是通的管子'),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('wedge'),
+        from: vec3Schema(),
+        to: vec3Schema(),
+        rise: axisSchema().default('y').describe('高度方向'),
+        run: axisSchema()
+          .default('x')
+          .describe('斜面下降的方向，必須與 rise 不同軸；起點端滿高、終點端剩一格'),
+        reversed: z.boolean().default(false).describe('true 改成沿 run 軸負向變矮'),
+        hollow: z.boolean().default(false),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('arch'),
+        center: vec3Schema().describe('起拱線中心，也就是兩隻拱腳連線的中點'),
+        radius: z.number().min(1).max(128).describe('拱內緣半徑；開口寬度 = 2×radius−1'),
+        thickness: z.number().min(1).max(64).default(1).describe('拱圈厚度'),
+        depth: z.number().int().min(1).max(256).default(1).describe('沿第三軸的進深'),
+        span: axisSchema().default('x').describe('拱跨越的方向'),
+        rise: axisSchema().default('y').describe('向上的方向，必須與 span 不同軸'),
+        legHeight: z
+          .number()
+          .int()
+          .min(0)
+          .max(256)
+          .default(0)
+          .describe('起拱線以下的直柱高度；城門與橋拱要它，純半圓設 0'),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('stairs'),
+        from: vec3Schema().describe('第一階踏面的起點角落：最低、最靠近起點、寬度方向座標最小那一格'),
+        direction: z.enum(STAIR_DIRECTIONS).describe('水平前進方向；階梯一律沿 Y 軸上升'),
+        steps: z.number().int().min(1).max(256),
+        width: z.number().int().min(1).max(64).default(1).describe('梯寬，往前進方向的左手邊展開'),
+        stepRise: z.number().int().min(1).max(8).default(1).describe('每階上升幾格'),
+        stepRun: z.number().int().min(1).max(8).default(1).describe('每階前進幾格（踏面深度）'),
+        solid: z
+          .boolean()
+          .default(false)
+          .describe('false 懸空踏板；true 每階往下補滿到起點高度，做成實心梯體'),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('prism'),
+        center: vec3Schema(),
+        radius: z
+          .number()
+          .min(1)
+          .max(128)
+          .describe('中心到「邊」的距離；邊數愈多愈接近同半徑的 cylinder'),
+        height: z.number().int().min(1).max(384),
+        sides: z.number().int().min(3).max(12).default(6).describe('3 三角柱、6 六角塔、8 八角亭'),
+        rotation: z.number().min(-360).max(360).default(0).describe('繞軸旋轉幾度，用來對齊某一邊的朝向'),
+        axis: axisSchema().default('y'),
+        hollow: z.boolean().default(false),
       })
       .strict(),
   ]);

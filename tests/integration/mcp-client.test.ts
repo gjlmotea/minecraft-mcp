@@ -158,6 +158,27 @@ describe('MCP 工具面', () => {
     expect(structured(result)['fillBatches']).toBeGreaterThan(0);
   });
 
+  /**
+   * 新形狀最典型的失效方式不是幾何算錯，而是「domain 加了、schema 沒接上」或
+   * 「schema 的預設值填不進去」——兩者都只在真正走一次工具面時才會現形。
+   * 這裡刻意只給必填參數，讓 zod 的 default 去補其餘欄位。
+   */
+  it.each([
+    ['tube', { kind: 'tube', from: { x: 0, y: 70, z: 0 }, to: { x: 8, y: 76, z: 8 }, radius: 2 }],
+    ['wedge', { kind: 'wedge', from: { x: 0, y: 70, z: 0 }, to: { x: 6, y: 76, z: 4 } }],
+    ['arch', { kind: 'arch', center: { x: 0, y: 70, z: 0 }, radius: 4 }],
+    ['stairs', { kind: 'stairs', from: { x: 0, y: 70, z: 0 }, direction: 'x+', steps: 6 }],
+    ['prism', { kind: 'prism', center: { x: 0, y: 70, z: 0 }, radius: 5, height: 8 }],
+  ])('mc_build_preview 接得住 %s，缺的參數由預設值補齊', async (_kind, shape) => {
+    const result = await client.callTool({
+      name: 'mc_build_preview',
+      arguments: { shape, block: 'stone' },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(structured(result)['blockCount']).toBeGreaterThan(0);
+    expect(fake.issued).toHaveLength(0);
+  });
+
   it('mc_build_shape 把球面合併成遠少於方塊數的指令', async () => {
     const result = await client.callTool({
       name: 'mc_build_shape',
